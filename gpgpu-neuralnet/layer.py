@@ -39,22 +39,23 @@ Example of usage:
 >>> i.finilize_links()
 
     Setting up inputs for entire neural network
->>> i.outputs[:] = ( 1, 2 )
->>> i.outputs
-array([ 1.,  2.], dtype=float32)
+>>> i.set_inputs( numpy.array( ( 1, 2 ), numpy.float32 ) )
 
     Setting up weights of links.
->>> h.weights[:]=( 0, 1, 2, 3, 4, -5, 6, 7, 8 )
->>> o.weights[:]=( 9, 10, 0.1, 0.2 )
->>> h.weights
-array([ 0.,  1.,  2.,  3.,  4., -5.,  6.,  7.,  8.], dtype=float32)
->>> o.weights
-array([  9. ,  10. ,   0.1,   0.2], dtype=float32)
+>>> h.set_weights( numpy.array( ( 0, 1, 2, 3, 4, -5, 6, 7, 8 ), numpy.float32 ) )
+>>> o.set_weights( numpy.array( ( 9, 10, 0.1, 0.2 ), numpy.float32 ) )
 
     Start simulation
 >>> i.process()
->>> o.outputs
+>>> i.get_outputs( )
+array([ 1.,  2.], dtype=float32)
+>>> h.get_outputs( )
+array([ 0.9974578 , -0.96402615,  1.        ], dtype=float32)
+>>> o.get_outputs( )
 array([-0.09323524], dtype=float32)
+
+>>> o.setup_train_data( numpy.array( ( 1, ), numpy.float32 ) )
+>>> i.calc_weights_gradient( )
 
 """
 
@@ -82,12 +83,11 @@ class Layer( object ):
 
         self.neuron_count = neuron_count
         self.opencl = opencl
-        self.outputs = numpy.ndarray( [neuron_count], numpy.float32 )
-        self.outputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.WRITE_ONLY, self.outputs.nbytes )
+        self.outputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.WRITE_ONLY, self.neuron_count * 4 )
         self.prev_layers = []
         self.next_layers = []
         self.processed = False
-        self.inputs_per_neuron = numpy.int32( 1 )      # polarization input is always exists
+        self.inputs_per_neuron = 1      # polarization input is always exists
 
     def link_next( self, next_layer, this_start_neuron, this_neurons_count ):
         """
@@ -112,23 +112,33 @@ class Layer( object ):
         
         Creates OpenCL buffers, programs, etc. Must be called prior to process.
         """
-        self.inputs = numpy.ndarray( [ self.inputs_per_neuron ], numpy.float32 )
-        self.weights = numpy.ndarray( [ self.inputs_per_neuron * self.neuron_count ], numpy.float32 )
-        self.inputs[0] = numpy.float32( 1.0 )
+        # inputs_buf doesn't store polarization link
+        self.inputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY, ( max( 1, self.inputs_per_neuron - 1 ) ) * 4 )
+        self.weights_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY, self.inputs_per_neuron * self.neuron_count * 4 )
 
-        self.inputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.USE_HOST_PTR, hostbuf = self.inputs )
-        self.weights_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.USE_HOST_PTR, hostbuf = self.weights )
+        self.gradients_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.WRITE_ONLY, self.inputs_per_neuron * self.neuron_count * 4 )
+        self.errors_backpropagation_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.neuron_count * 4 )
 
         self.processed = False
-
         for l in self.next_layers:
             l[0].finilize_links()
+
+    def set_weights( self, weights ):
+        """
+        Set weights for entire layer.
+        
+        @param weights
+            NumPy.NDArray of float32 values, size equals to inputs_per_neuron * neuron_count
+        """
+        pyopencl.enqueue_write_buffer( self.opencl.queue, self.weights_buf, weights, is_blocking = True )
 
     def get_outputs( self ):
         """
         Wait for outputs.
         """
-        self.process_wait_event.wait()
+        outputs = numpy.ndarray( [ self.neuron_count ], numpy.float32 )
+        pyopencl.enqueue_read_buffer( self.opencl.queue, self.outputs_buf, outputs, is_blocking = True )
+        return outputs
 
     def reset_processed( self ):
         """
@@ -143,8 +153,6 @@ class Layer( object ):
         Process signal by this layer.
         
         Invokes OpenCL program that produces output array in background.
-        Use get_outputs to wait for GPU to completion if computations.
-        Must be called only if layer has a link to next layer.
         """
 
         # ensure that all previous layers are processed
@@ -152,25 +160,69 @@ class Layer( object ):
             if not l[0].processed:
                 return
 
-        i_s = 1
+        i_s = 0
         for l in self.prev_layers:
-            l[0].get_outputs()
-            self.inputs[i_s:i_s + l[2]] = l[0].outputs[l[1]:l[1] + l[2]]
+            pyopencl.enqueue_copy_buffer( 
+                self.opencl.queue, l[0].outputs_buf, self.inputs_buf,
+                byte_count = l[2] * 4,
+                src_offset = l[1] * 4,
+                dst_offset = i_s * 4
+                )
             i_s += l[2]
 
         #process layer
         self.opencl.program.process_layer( 
-            self.opencl.queue, self.outputs.shape,
+            self.opencl.queue, ( self.neuron_count, ),
             self.inputs_buf, self.weights_buf,
-            self.inputs_per_neuron,
-            self.outputs_buf )
-
-        self.process_wait_event = pyopencl.enqueue_read_buffer( self.opencl.queue, self.outputs_buf, self.outputs )
+            numpy.int32( self.inputs_per_neuron ),
+            self.outputs_buf
+            )
 
         self.processed = True
 
         for l in self.next_layers:
             l[0].process()
+
+    def calc_weights_gradient( self ):
+        """
+        Calculate gradient of weights.
+        
+        This method should be called only for processed layers as it's used
+        inputs array which is valid only at processing time.
+        """
+
+        for l in self.next_layers:
+            if not l[0].processed:
+                l[0].calc_weights_gradient()
+
+        self.opencl.program.calc_derivatives( 
+            self.opencl.queue, ( self.neuron_count, ),
+            self.outputs_buf,
+            self.errors_backpropagation_buf
+            )
+
+        self.opencl.program.calc_layer_gradients( 
+            self.opencl.queue, ( self.neuron_count * self.inputs_per_neuron, ),
+            self.inputs_buf, self.errors_backpropagation_buf,
+            numpy.int32( self.inputs_per_neuron ),
+            self.gradients_buf
+            )
+
+        i_s = numpy.int32( 1 )
+        for l in self.prev_layers:
+            self.opencl.program.propagate_errors( 
+                self.opencl.queue, ( l[2], ),
+                self.errors_backpropagation_buf,
+                self.weights_buf,
+                numpy.int32( l[1] ),
+                numpy.int32( self.neuron_count ),
+                i_s,
+                numpy.int32( self.inputs_per_neuron ),
+                l[0].errors_backpropagation_buf,
+            )
+            i_s += l[2]
+
+        self.processed = True
 
 class InputLayer( Layer ):
     """
@@ -179,10 +231,14 @@ class InputLayer( Layer ):
     'outputs' array on InputLayer. Then call 'process'.
     """
 
-    def get_outputs( self ):
+    def set_inputs( self, inputs ):
         """
-        Do nothing since outputs are simply passed to next layer.
+        Setup inputs to input layer.
+        
+        @param inputs
+            NumPy.NDArray of float32 values, size equals to neuron count
         """
+        pyopencl.enqueue_write_buffer( self.opencl.queue, self.outputs_buf, inputs, is_blocking = True )
 
     def process( self ):
         """
@@ -196,17 +252,29 @@ class InputLayer( Layer ):
         #immediately reset 'processed' flag as we process entire network
         self.reset_processed()
 
+    def calc_weights_gradient( self ):
+        """
+        Does nothing. Calls calc_weights_gradient on following layers.
+        """
+        for l in self.next_layers:
+            if not l[0].processed:
+                l[0].calc_weights_gradient()
+
+        self.reset_processed()
+
 class OutputLayer( Layer ):
     """
     Special layer for outputs.
     """
-    def process( self ):
+    def setup_train_data( self, data_to_train ):
         """
-        Automatically calls get_outputs since there is no calculations following
-        output layer.
+        Setup data to train neural network to.
+        
+        @param data_to_train
+            Numpy array, size should exactly match neurons count of OutputLayer.
         """
-        super( OutputLayer, self ).process()
-        self.get_outputs()
+
+        pyopencl.enqueue_write_buffer( self.opencl.queue, self.errors_backpropagation_buf, data_to_train )
 
 if __name__ == '__main__':
     import doctest
