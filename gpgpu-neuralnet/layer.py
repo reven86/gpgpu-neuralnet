@@ -57,7 +57,6 @@ array([-0.09323524], dtype=float32)
 >>> o.setup_train_data( numpy.array( ( 1, ), numpy.float32 ) )
 >>> i.calc_weights_gradient( )
 
-
 """
 
 import numpy
