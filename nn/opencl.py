@@ -99,6 +99,22 @@ class OpenCL( object ):
                 
                 new_errors[ gid + ofs ] = sum;
             }
+            
+            __kernel void adjust_weights_gradient_descent(
+                __global const float * gradients,
+                float n, float alpha,
+                int delta_offset,
+                __global float * old_delta,
+                __global float * weights
+                )
+            {
+                int gid = get_global_id( 0 );
+                
+                float new_delta = n * ( -gradients[ gid ] ) + alpha * old_delta[ gid + delta_offset ];
+                
+                weights[ gid ] += new_delta;
+                old_delta[ gid + delta_offset ] = new_delta;
+            }
             """ ).build()
 
 if __name__ == '__main__':
