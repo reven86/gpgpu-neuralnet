@@ -61,11 +61,11 @@ class OpenCL( object ):
                 errors[ gid ] = derivative * errors[ gid ];
             }
             
-            __kernel void calc_layer_gradients(
+            __kernel void calc_layer_gradient(
                 __global const float * inputs,
                 __global const float * errors,
                 int inputs_per_neuron,
-                __global float * gradients )
+                __global float * gradient )
             {
                 int gid = get_global_id( 0 );
                 
@@ -78,7 +78,7 @@ class OpenCL( object ):
                 else
                     input = inputs[ input_index - 1 ];
 
-                gradients[ gid ] = input * errors[ error_index ];
+                gradient[ gid ] = input * errors[ error_index ];
             }
             
             __kernel void propagate_errors(
@@ -100,8 +100,21 @@ class OpenCL( object ):
                 new_errors[ gid + ofs ] = sum;
             }
             
+            __kernel void setup_training_data(
+                __global const float * real_outputs,
+                __global const float * target_outputs,
+                __global float * errors,
+                __global float * total_errors
+                )
+            {
+                int gid = get_global_id( 0 );
+                
+                errors[ gid ] = real_outputs[ gid ] - target_outputs[ gid ];
+                total_errors[ gid ] += errors[ gid ] * errors[ gid ];
+            }
+
             __kernel void adjust_weights_gradient_descent(
-                __global const float * gradients,
+                __global const float * gradient,
                 float n, float alpha,
                 int delta_offset,
                 __global float * old_delta,
@@ -110,12 +123,21 @@ class OpenCL( object ):
             {
                 int gid = get_global_id( 0 );
                 
-                float new_delta = n * ( -gradients[ gid ] ) + alpha * old_delta[ gid + delta_offset ];
+                float new_delta = n * ( -gradient[ gid ] ) + alpha * old_delta[ gid + delta_offset ];
                 
                 weights[ gid ] += new_delta;
                 old_delta[ gid + delta_offset ] = new_delta;
             }
             """ ).build()
+
+        self.kernel_process_layer = self.program.process_layer
+        self.kernel_calc_derivatives = self.program.calc_derivatives
+        self.kernel_calc_layer_gradient = self.program.calc_layer_gradient
+        self.kernel_propagate_errors = self.program.propagate_errors
+        self.kernel_setup_training_data = self.program.setup_training_data
+        self.kernel_adjust_weights_gradient_descent = self.program.adjust_weights_gradient_descent
+#        for attr in self.program.all_kernels():
+#            setattr( self, 'kernel_' + attr.get_info( pyopencl.kernel_info.FUNCTION_NAME ), attr )
 
 if __name__ == '__main__':
     import doctest

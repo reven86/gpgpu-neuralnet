@@ -141,6 +141,16 @@ class TrainingMethod( object ):
 
         self.prepare_training( input_layer )
 
+        outputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY, output_layer.neuron_count * 4 )
+        total_error_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, output_layer.neuron_count * 4 )
+
+        total_error = numpy.array( [ 0.0 for x in range( output_layer.neuron_count ) ], numpy.float32 )
+
+        zero_buf = pyopencl.Buffer( 
+            self.opencl.context,
+            pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = total_error )
+
         i = 0
         while training_results.minimal_error > target_error:
             i += 1
@@ -148,23 +158,25 @@ class TrainingMethod( object ):
                 break
 
             error_sum = numpy.float32( 0.0 );
+            pyopencl.enqueue_copy_buffer( self.opencl.queue, zero_buf, total_error_buf )
             for inputs, outputs in training_data:
-                input_layer.set_inputs( inputs )
+                input_layer.set_inputs( inputs, False )
                 input_layer.process()
 
-                cur_error = output_layer.get_outputs() - outputs
-                output_layer.setup_training_data( cur_error )
-
-                cur_error *= cur_error
-                cur_error = cur_error.sum()
-                error_sum += cur_error
+                pyopencl.enqueue_write_buffer( self.opencl.queue, outputs_buf, outputs )
+                self.opencl.kernel_setup_training_data( 
+                    self.opencl.queue, ( output_layer.neuron_count, ),
+                    output_layer.outputs_buf,
+                    outputs_buf,
+                    output_layer.errors_backpropagation_buf,
+                    total_error_buf
+                    )
 
                 input_layer.calc_weights_gradient()
-
-                #print input_layer.next_layers[0][0].get_weights()
                 self.adjust_weights( input_layer )
-                #print input_layer.next_layers[0][0].get_weights()
 
+            pyopencl.enqueue_read_buffer( self.opencl.queue, total_error_buf, total_error, is_blocking = True )
+            error_sum = total_error.sum()
             if error_sum < training_results.minimal_error:
                 training_results.minimal_error = error_sum
                 training_results.store_weights( input_layer )
@@ -203,7 +215,7 @@ class GradientDescent( TrainingMethod ):
         """
 
         ll = [ layer ]
-        self.total_weights = numpy.int32( 0.0 )
+        self.total_weights = numpy.int32( 0 )
 
         while ll:
             l = ll.pop()
@@ -221,12 +233,12 @@ class GradientDescent( TrainingMethod ):
         """
         Adjust weights of neural network by applying gradient descent method.
         """
-        #gradients = numpy.ndarray( [layer.neuron_count * layer.inputs_per_neuron], numpy.float32 )
-        #pyopencl.enqueue_read_buffer( self.opencl.queue, layer.gradients_buf, gradients, is_blocking = True )
+        #gradient = numpy.ndarray( [layer.neuron_count * layer.inputs_per_neuron], numpy.float32 )
+        #pyopencl.enqueue_read_buffer( self.opencl.queue, layer.gradient_buf, gradient, is_blocking = True )
 
-        self.opencl.program.adjust_weights_gradient_descent( 
+        self.opencl.kernel_adjust_weights_gradient_descent( 
             self.opencl.queue, ( layer.neuron_count * layer.inputs_per_neuron, ),
-            layer.gradients_buf,
+            layer.gradient_buf,
             self.n, self.alpha,
             self.weights_delta_offset,
             self.weights_delta_buf,

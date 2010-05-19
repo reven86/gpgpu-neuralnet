@@ -82,7 +82,7 @@ class Layer( object ):
 
         self.neuron_count = neuron_count
         self.opencl = opencl
-        self.outputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.WRITE_ONLY, self.neuron_count * 4 )
+        self.outputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.neuron_count * 4 )
         self.prev_layers = []
         self.next_layers = []
         self.processed = False
@@ -115,7 +115,7 @@ class Layer( object ):
         self.inputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY, ( max( 1, self.inputs_per_neuron - 1 ) ) * 4 )
         self.weights_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.inputs_per_neuron * self.neuron_count * 4 )
 
-        self.gradients_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.inputs_per_neuron * self.neuron_count * 4 )
+        self.gradient_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.inputs_per_neuron * self.neuron_count * 4 )
         self.errors_backpropagation_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.neuron_count * 4 )
 
         self.processed = False
@@ -178,7 +178,7 @@ class Layer( object ):
             i_s += l[2]
 
         #process layer
-        self.opencl.program.process_layer( 
+        self.opencl.kernel_process_layer( 
             self.opencl.queue, ( self.neuron_count, ),
             self.inputs_buf, self.weights_buf,
             numpy.int32( self.inputs_per_neuron ),
@@ -202,22 +202,22 @@ class Layer( object ):
             if not l[0].processed:
                 l[0].calc_weights_gradient()
 
-        self.opencl.program.calc_derivatives( 
+        self.opencl.kernel_calc_derivatives( 
             self.opencl.queue, ( self.neuron_count, ),
             self.outputs_buf,
             self.errors_backpropagation_buf
             )
 
-        self.opencl.program.calc_layer_gradients( 
+        self.opencl.kernel_calc_layer_gradient( 
             self.opencl.queue, ( self.neuron_count * self.inputs_per_neuron, ),
             self.inputs_buf, self.errors_backpropagation_buf,
             numpy.int32( self.inputs_per_neuron ),
-            self.gradients_buf
+            self.gradient_buf
             )
 
         i_s = numpy.int32( 1 )
         for l in self.prev_layers:
-            self.opencl.program.propagate_errors( 
+            self.opencl.kernel_propagate_errors( 
                 self.opencl.queue, ( l[2], ),
                 self.errors_backpropagation_buf,
                 self.weights_buf,
@@ -238,34 +238,36 @@ class InputLayer( Layer ):
     'outputs' array on InputLayer. Then call 'process'.
     """
 
-    def set_inputs( self, inputs ):
+    def __init__( self, neuron_count, opencl ):
+        """
+        Increase inputs per neuron by input neurons
+        """
+        super( InputLayer, self ).__init__( neuron_count, opencl )
+
+        self.inputs_per_neuron += neuron_count
+
+    def set_inputs( self, inputs, is_blocking = True ):
         """
         Setup inputs to input layer.
         
         @param inputs
             NumPy.NDArray of float32 values, size equals to neuron count
         """
-        pyopencl.enqueue_write_buffer( self.opencl.queue, self.outputs_buf, inputs, is_blocking = True )
+        pyopencl.enqueue_write_buffer( self.opencl.queue, self.inputs_buf, inputs, is_blocking = is_blocking )
 
     def process( self ):
         """
         Process for InputLayer does nothing. Simple invokes process for next layers.
         """
-        self.processed = True
+        super( InputLayer, self ).process()
 
-        for l in self.next_layers:
-            l[0].process()
-
-        #immediately reset 'processed' flag as we process entire network
         self.reset_processed()
 
     def calc_weights_gradient( self ):
         """
         Does nothing. Calls calc_weights_gradient on following layers.
         """
-        for l in self.next_layers:
-            if not l[0].processed:
-                l[0].calc_weights_gradient()
+        super( InputLayer, self ).calc_weights_gradient()
 
         self.reset_processed()
 
