@@ -39,26 +39,43 @@ class OpenCL( object ):
                 __global const float * inputs,
                 __global const float * weights,
                 int inputs_per_neuron,
+                int neuron_count,
+                __local float * partial_sum,
                 __global float * outputs )
             {
-                int gid = get_global_id( 0 );
-                
-                float sum = weights[ gid * inputs_per_neuron ];    // polarization link
-                for( int i = 0; i < inputs_per_neuron - 1; i++ )
-                    sum += inputs[ i ] * weights[ gid * inputs_per_neuron + i + 1 ];
-               
-                outputs[ gid ] = tanh( beta * sum );
-            }
-            
-            __kernel void calc_derivatives(
-                __global const float * outputs,
-                __global float * errors )
-            {
-                int gid = get_global_id( 0 );
-                
-                float derivative = beta * ( 1.0f - outputs[ gid ] * outputs[ gid ] );
+                for (uint y = get_group_id(0); y < neuron_count; y += get_num_groups(0))
+                {
+                    const __global float * row = weights + y * inputs_per_neuron;
 
-                errors[ gid ] = derivative * errors[ gid ];
+                    int lid = get_local_id(0);
+                    int sum_start = lid;
+                    
+                    float sum;
+                    if (lid == 0)
+                    {
+                        sum = row[0];
+                        sum_start = get_local_size(0);
+                    }
+                    else
+                        sum = 0.0;
+
+                    for (uint x = sum_start; x < inputs_per_neuron; x += get_local_size(0))
+                        sum += row[x] * inputs[x - 1];
+
+                    partial_sum[lid] = sum;
+
+                    for (uint stride = get_local_size(0)/2; stride > 0; stride /= 2)
+                    {
+                        barrier(CLK_LOCAL_MEM_FENCE);
+                        if (lid < stride)
+                            partial_sum[lid] += partial_sum[lid + stride];
+                    }
+
+                    if (lid == 0)
+                        outputs[y] = tanh( beta * partial_sum[0] );
+
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                }
             }
             
             __kernel void calc_layer_gradient(
@@ -72,32 +89,51 @@ class OpenCL( object ):
                 int input_index = gid % inputs_per_neuron;
                 int error_index = gid / inputs_per_neuron;
                 
-                float input;
                 if( input_index == 0 )
-                    input = 1.0f;
+                    gradient[ gid ] = errors[ error_index ];
                 else
-                    input = inputs[ input_index - 1 ];
-
-                gradient[ gid ] = input * errors[ error_index ];
+                    gradient[ gid ] = inputs[ input_index - 1 ] * errors[ error_index ];
             }
             
             __kernel void propagate_errors(
                 __global const float * errors,
                 __global const float * weights,
-                int ofs,
+                int ofs, int count,
                 int errors_count,
                 int weights_offset,
                 int inputs_per_neuron,
+                __local float * partial_sum,
+                __global const float * outputs,
                 __global float * new_errors
                 )
             {
-                int gid = get_global_id( 0 );
-                
-                float sum = 0.0f;
-                for( int i = 0; i < errors_count; i++ )
-                    sum += errors[ i ] * weights[ weights_offset + i * inputs_per_neuron ];
-                
-                new_errors[ gid + ofs ] = sum;
+                for (uint y = get_group_id(0); y < count; y += get_num_groups(0))
+                {
+                    const __global float * wcol = weights + weights_offset + y;
+
+                    int lid = get_local_id(0);                    
+
+                    float sum = 0.0f;
+                    for (uint x = lid; x < errors_count; x += get_local_size(0))
+                        sum += wcol[x * inputs_per_neuron] * errors[x];
+
+                    partial_sum[lid] = sum;
+
+                    for (uint stride = get_local_size(0)/2; stride > 0; stride /= 2)
+                    {
+                        barrier(CLK_LOCAL_MEM_FENCE);
+                        if (lid < stride)
+                            partial_sum[lid] += partial_sum[lid + stride];
+                    }
+
+                    if (lid == 0)
+                    {
+                        float output = outputs[ y + ofs ];
+                        new_errors[ y + ofs ] = partial_sum[ 0 ] * beta * ( 1.0f - output * output );
+                    }
+
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                }
             }
             
             __kernel void setup_training_data(
@@ -109,8 +145,10 @@ class OpenCL( object ):
             {
                 int gid = get_global_id( 0 );
                 
-                errors[ gid ] = real_outputs[ gid ] - target_outputs[ gid ];
-                total_errors[ gid ] += errors[ gid ] * errors[ gid ];
+                float err = real_outputs[ gid ] - target_outputs[ gid ];
+                total_errors[ gid ] += err * err;
+                
+                errors[ gid ] = err * beta * ( 1.0f - real_outputs[ gid ] * real_outputs[ gid ] );
             }
 
             __kernel void adjust_weights_gradient_descent(
@@ -131,7 +169,6 @@ class OpenCL( object ):
             """ ).build()
 
         self.kernel_process_layer = self.program.process_layer
-        self.kernel_calc_derivatives = self.program.calc_derivatives
         self.kernel_calc_layer_gradient = self.program.calc_layer_gradient
         self.kernel_propagate_errors = self.program.propagate_errors
         self.kernel_setup_training_data = self.program.setup_training_data

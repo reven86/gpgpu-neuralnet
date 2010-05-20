@@ -12,12 +12,18 @@ import cProfile
 def test():
     ocl = OpenCL( pyopencl.create_some_context() )
     i = InputLayer( 2, ocl )
+    h1 = Layer( 1000, ocl )
+    h2 = Layer( 10, ocl )
     o = OutputLayer( 1, ocl )
     i.link_next( o, 0, 2 )
+    #h1.link_next( o, 0, 1000 )
+    #h2.link_next( o, 0, 10 )
     i.finilize_links()
 
     i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
     o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
+    #i.set_weights( numpy.array( ( 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 ), numpy.float32 ) )
+    #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
     gd = GradientDescent( ocl, n = 0.8, alpha = 0.9 )

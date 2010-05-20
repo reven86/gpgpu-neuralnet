@@ -42,6 +42,7 @@ Example of usage:
 >>> i.set_inputs( numpy.array( ( 1, 2 ), numpy.float32 ) )
 
     Setting up weights of links.
+>>> i.set_weights( numpy.array( ( 0, 1, 0, 0, 0, 1 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( 0, 1, 2, 3, 4, -5, 6, 7, 8 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 9, 10, 0.1, 0.2 ), numpy.float32 ) )
 
@@ -179,10 +180,13 @@ class Layer( object ):
 
         #process layer
         self.opencl.kernel_process_layer( 
-            self.opencl.queue, ( self.neuron_count, ),
+            self.opencl.queue, ( self.neuron_count * 64, ),
             self.inputs_buf, self.weights_buf,
             numpy.int32( self.inputs_per_neuron ),
-            self.outputs_buf
+            numpy.int32( self.neuron_count ),
+            pyopencl.LocalMemory( 256 ),
+            self.outputs_buf,
+            local_size = ( 64, )
             )
 
         self.processed = True
@@ -202,11 +206,8 @@ class Layer( object ):
             if not l[0].processed:
                 l[0].calc_weights_gradient()
 
-        self.opencl.kernel_calc_derivatives( 
-            self.opencl.queue, ( self.neuron_count, ),
-            self.outputs_buf,
-            self.errors_backpropagation_buf
-            )
+        #err = numpy.ndarray( [ self.neuron_count ], numpy.float32 )
+        #grad = numpy.ndarray( [ self.neuron_count * self.inputs_per_neuron ], numpy.float32 )
 
         self.opencl.kernel_calc_layer_gradient( 
             self.opencl.queue, ( self.neuron_count * self.inputs_per_neuron, ),
@@ -215,17 +216,24 @@ class Layer( object ):
             self.gradient_buf
             )
 
+        #pyopencl.enqueue_read_buffer( self.opencl.queue, self.errors_backpropagation_buf, err )
+        #pyopencl.enqueue_read_buffer( self.opencl.queue, self.gradient_buf, grad )
+
         i_s = numpy.int32( 1 )
         for l in self.prev_layers:
             self.opencl.kernel_propagate_errors( 
-                self.opencl.queue, ( l[2], ),
+                self.opencl.queue, ( l[2] * 64, ),
                 self.errors_backpropagation_buf,
                 self.weights_buf,
                 numpy.int32( l[1] ),
+                numpy.int32( l[2] ),
                 numpy.int32( self.neuron_count ),
                 i_s,
                 numpy.int32( self.inputs_per_neuron ),
+                pyopencl.LocalMemory( 256 ),
+                l[0].outputs_buf,
                 l[0].errors_backpropagation_buf,
+                local_size = ( 64, )
             )
             i_s += l[2]
 
@@ -276,14 +284,14 @@ class OutputLayer( Layer ):
     Special layer for outputs.
     """
 
-    def setup_training_data( self, data_to_train ):
-        """
-        Setup data to train neural network to.
-        
-        @param data_to_train
-            Numpy array, size should exactly match neurons count of OutputLayer.
-        """
-        pyopencl.enqueue_write_buffer( self.opencl.queue, self.errors_backpropagation_buf, data_to_train, is_blocking = True )
+#    def setup_training_data( self, data_to_train ):
+#        """
+#        Setup data to train neural network to.
+#        
+#        @param data_to_train
+#            Numpy array, size should exactly match neurons count of OutputLayer.
+#        """
+#        pyopencl.enqueue_write_buffer( self.opencl.queue, self.errors_backpropagation_buf, data_to_train, is_blocking = True )
 
 if __name__ == '__main__':
     import doctest
