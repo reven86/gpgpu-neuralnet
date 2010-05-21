@@ -114,7 +114,7 @@ class TrainingMethod( object ):
             self.randomize_weights( l[0] )
 
     def start_training( self, input_layer, output_layer, training_data, training_results,
-                        maximal_iterations = 10000, target_error = 0.0001 ):
+                        maximal_iterations = 10000, target_error = 0.01 ):
         """
         Starts training.
         
@@ -176,7 +176,11 @@ class TrainingMethod( object ):
                 self.adjust_weights( input_layer )
 
             pyopencl.enqueue_read_buffer( self.opencl.queue, total_error_buf, total_error, is_blocking = True )
-            error_sum = total_error.sum()
+
+            error_sum = numpy.sqrt( total_error.sum() )
+
+            self.adjust_training_parameters( error_sum )
+
             if error_sum < training_results.minimal_error:
                 training_results.minimal_error = error_sum
                 training_results.store_weights( input_layer )
@@ -191,7 +195,7 @@ class GradientDescent( TrainingMethod ):
     Gradient descent optimization method. Uses gradient as a vector of weights adjustment.
     """
 
-    def __init__( self, opencl, n = 0.5, alpha = 0.5 ):
+    def __init__( self, opencl, n = 0.5, alpha = 0.2, kw = 1.03, pd = 0.7, pi = 1.02 ):
         """
         Constructs gradient descent training method.
         
@@ -200,11 +204,24 @@ class GradientDescent( TrainingMethod ):
             
         @param alpha
             Momentum coefficient. Useful when the gradient is near to zero vector.
+            
+        @param kw
+            Acceptable increase in error function (relative).
+        
+        @param pd
+            Auto decrease of training coefficient (relative).
+            
+        @param pi
+            Auto increase of training coefficient (relative).
         """
         super( GradientDescent, self ).__init__( opencl )
 
         self.n = numpy.float32( n )
         self.alpha = numpy.float32( alpha )
+        self.kw = numpy.float32( kw )
+        self.pd = numpy.float32( pd )
+        self.pi = numpy.float32( pi )
+        self.last_error = numpy.float32( 0.0 )
 
     def prepare_training( self, layer ):
         """
@@ -249,6 +266,16 @@ class GradientDescent( TrainingMethod ):
 
         for l in layer.next_layers:
             self.adjust_weights( l[ 0 ] )
+
+    def adjust_training_parameters( self, error ):
+        """
+        Adjust training parameters by total calculated error value
+        """
+        if error > self.kw * self.last_error:
+            self.n *= self.pd
+        elif self.n < 1.0:
+            self.n *= self.pi
+        self.last_error = error
 
 if __name__ == '__main__':
     import doctest
