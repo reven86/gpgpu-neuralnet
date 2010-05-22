@@ -72,10 +72,28 @@ array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
          6.96000719, -10.4599905 ,  -3.22179294, -10.19824028,
          5.60174894,  -2.97676086,   6.96663904, -10.45340729,
          4.8402071 ,   1.58020127,   3.14647174], dtype=float32)
+
+    Example of training neural network by Quickprop method
+>>> m = Quickprop( ocl, n = 0.5, alpha = 0.3 )
+>>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
+>>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
+>>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
+>>> m.start_training( nnc, training_data, tr, 10 )
+>>> tr.iterations
+33
+>>> tr.minimal_error
+1.4140973
+>>> tr.optimal_weights
+array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
+         6.96000719, -10.4599905 ,  -3.22179294, -10.19824028,
+         5.60174894,  -2.97676086,   6.96663904, -10.45340729,
+         4.8402071 ,   1.58020127,   3.14647174], dtype=float32)
 """
 
 import numpy
 import pyopencl
+
+
 
 class TrainingResults( object ):
     """
@@ -107,6 +125,8 @@ class TrainingResults( object ):
         Apply optimal weights to neural network.
         """
         pyopencl.enqueue_write_buffer( context.opencl.queue, context.weights_buf, self.optimal_weights )
+
+
 
 class TrainingMethod( object ):
     """
@@ -264,6 +284,8 @@ class TrainingMethod( object ):
             context.weights_buf
             )
 
+
+
 class GradientDescent( TrainingMethod ):
     """
     Gradient descent optimization method. Uses gradient as a vector of weights adjustment.
@@ -282,6 +304,8 @@ class GradientDescent( TrainingMethod ):
         """
         return context.gradient_buf
 
+
+
 class ConjugateGradient( TrainingMethod ):
     """
     Conjugate gradients training algorithm.
@@ -294,7 +318,6 @@ class ConjugateGradient( TrainingMethod ):
 
         #1 float beta coefficient
         self.beta_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, 4 )
-        self.it = 0
 
     def prepare_training( self, context ):
         """
@@ -305,10 +328,6 @@ class ConjugateGradient( TrainingMethod ):
         """
         super( ConjugateGradient, self ).prepare_training( context )
 
-        self.prev_weights_buf = pyopencl.Buffer( 
-            self.opencl.context, pyopencl.mem_flags.READ_ONLY,
-            context.total_weights * 4
-            )
         self.direction_buf = pyopencl.Buffer( 
             self.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
             hostbuf = numpy.array( [ 0.0 for x in range( context.total_weights ) ], numpy.float32 )
@@ -335,13 +354,13 @@ class ConjugateGradient( TrainingMethod ):
             local_size = ( 64, )
             )
 
-        self.it += 1
-        if self.it > context.total_neurons:
+        self.iteration_count += 1
+        if self.iteration_count > context.total_neurons:
             pyopencl.enqueue_write_buffer( self.opencl.queue, self.beta_buf, numpy.zeros( [1], numpy.float32 ) )
-            self.it = 0
+            self.iteration_count = 0
 
-        test = numpy.ndarray( [ context.total_weights ], numpy.float32 )
-        pyopencl.enqueue_read_buffer( self.opencl.queue, self.beta_buf, test, is_blocking = True )
+#        test = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        pyopencl.enqueue_read_buffer( self.opencl.queue, self.beta_buf, test, is_blocking = True )
 
         self.opencl.kernel_calc_conjugate_gradient_direction( 
             self.opencl.queue, ( context.total_weights, ),
@@ -351,17 +370,59 @@ class ConjugateGradient( TrainingMethod ):
             self.prev_gradient_buf
             )
 
-        pyopencl.enqueue_read_buffer( self.opencl.queue, self.direction_buf, test, is_blocking = True )
+#        pyopencl.enqueue_read_buffer( self.opencl.queue, self.direction_buf, test, is_blocking = True )
 
         return self.direction_buf
+
+
+
+class Quickprop( TrainingMethod ):
+    """
+    Quickprop training method
+    """
+
+    def __init__( self, *kargs, **kwargs ):
+        """
+        Constructor.
+        
+        Alpha (momentum coefficient) is used as alpha_max.
+        """
+        super( Quickprop, self ).__init__( *kargs, **kwargs )
+
+    def prepare_training( self, context ):
+        """
+        Create additional buffers to store previous gradient vector.
+        
+        @param layer
+            Input layer.
+        """
+        super( Quickprop, self ).prepare_training( context )
+
+        self.prev_direction_buf = pyopencl.Buffer( 
+            self.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.array( [ 0.0 for x in range( context.total_weights ) ], numpy.float32 )
+            )
 
     def adjust_weights( self, context ):
         """
         Adjust weights of neural network by certain direction.
         """
-        pyopencl.enqueue_copy_buffer( self.opencl.queue, context.weights_buf, self.prev_weights_buf )
+        self.opencl.kernel_adjust_weights_quickprop( 
+            self.opencl.queue, ( context.total_weights, ),
+            context.gradient_buf,
+            self.prev_direction_buf,
+            self.n, self.alpha, self.gamma,
+            self.weights_delta_buf,
+            context.weights_buf
+            )
 
-        super( ConjugateGradient, self ).adjust_weights( context )
+        pyopencl.enqueue_copy_buffer( self.opencl.queue, context.gradient_buf, self.prev_direction_buf )
+
+    def adjust_training_parameters( self, error ):
+        """
+        Disable parameters adjustment since they interpreted differently.
+        """
+        pass
 
 if __name__ == '__main__':
     import doctest

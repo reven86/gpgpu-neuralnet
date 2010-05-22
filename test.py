@@ -26,8 +26,9 @@ def test():
     #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
+    #m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
     #m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
+    m = Quickprop( ocl, n = 0.8, alpha = 0.3 )
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
@@ -37,8 +38,9 @@ def test():
 
     #m.randomize_weights( nnc )
 
-    # GradientDescent - 10007 iterations to convergence
-    # ConjugateGradient - >30000 iterations to convergence (bug??)
+    # GradientDescent - 10007 iterations to convergence (~40s GeForce 8800 GT)
+    # ConjugateGradient - >30000 iterations to convergence (bug??) (~130s GeForce 8800 GT)
+    # QuickProp - >30000 iterations to convergence
 
     for it in range( 3 ):
         m.start_training( nnc, training_data, tr, 10000 )

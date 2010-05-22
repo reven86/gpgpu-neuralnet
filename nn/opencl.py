@@ -174,6 +174,27 @@ class OpenCL( object ):
                 old_delta[ gid ] = new_delta;
             }
             
+            __kernel void adjust_weights_quickprop(
+                __global const float * direction,
+                __global const float * prev_direction,
+                float n, float alpha, float gamma,
+                __global float * old_delta,
+                __global float * weights
+                )
+            {
+                int gid = get_global_id( 0 );
+                
+                float new_delta;
+                
+                if( fabs( old_delta[ gid ] ) > 1e-8 )
+                    new_delta = min( direction[ gid ] / ( prev_direction[ gid ] - direction[ gid ] ), alpha ) * old_delta[ gid ];
+                else
+                    new_delta = -n * direction[ gid ];
+                
+                weights[ gid ] += new_delta;
+                old_delta[ gid ] = new_delta;
+            }
+            
             __kernel void calc_conjugate_gradient_beta(
                 __global const float * gradient,
                 __global const float * prev_gradient,
@@ -229,6 +250,7 @@ class OpenCL( object ):
         self.kernel_propagate_errors = self.program.propagate_errors
         self.kernel_setup_training_data = self.program.setup_training_data
         self.kernel_adjust_weights = self.program.adjust_weights
+        self.kernel_adjust_weights_quickprop = self.program.adjust_weights_quickprop
         self.kernel_calc_conjugate_gradient_beta = self.program.calc_conjugate_gradient_beta
         self.kernel_calc_conjugate_gradient_direction = self.program.calc_conjugate_gradient_direction
 #        for attr in self.program.all_kernels():
