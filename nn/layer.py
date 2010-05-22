@@ -265,8 +265,8 @@ class Layer( object ):
             if not l[0].processed:
                 l[0].calc_weights_gradient()
 
-        #err = numpy.ndarray( [ self.context.total_neurons ], numpy.float32 )
-        #grad = numpy.ndarray( [ self.context.total_weights ], numpy.float32 )
+#        err = numpy.ndarray( [ self.context.total_neurons ], numpy.float32 )
+#        grad = numpy.ndarray( [ self.context.total_weights ], numpy.float32 )
 
         self.opencl.kernel_calc_layer_gradient( 
             self.opencl.queue, ( self.weights_count, ),
@@ -278,8 +278,8 @@ class Layer( object ):
             self.context.gradient_buf
             )
 
-        #pyopencl.enqueue_read_buffer( self.opencl.queue, self.context.errors_backpropagation_buf, err )
-        #pyopencl.enqueue_read_buffer( self.opencl.queue, self.context.gradient_buf, grad )
+#        pyopencl.enqueue_read_buffer( self.opencl.queue, self.context.errors_backpropagation_buf, err, is_blocking = True )
+#        pyopencl.enqueue_read_buffer( self.opencl.queue, self.context.gradient_buf, grad, is_blocking = True )
 
         i_s = numpy.int32( 1 )
         for l in self.prev_layers:

@@ -18,7 +18,7 @@ def test():
     i.link_next( o, 0, 2 )
     #h1.link_next( o, 0, 1000 )
     #h2.link_next( o, 0, 10 )
-    ncc = ExecutionContext( i, o, allow_training = True )
+    nnc = ExecutionContext( i, o, allow_training = True )
 
     i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
     o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
@@ -26,36 +26,29 @@ def test():
     #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
-    #m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
+    #m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
+    m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
         ( numpy.array( ( 1.0, 0.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
-        ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
+        ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.8, ), numpy.float32 ) ),
         )
 
-    #m.randomize_weights( i )
+    #m.randomize_weights( nnc )
 
     # GradientDescent - 10007 iterations to convergence
 
     for it in range( 3 ):
-        m.start_training( ncc, training_data, tr, 10000 )
+        m.start_training( nnc, training_data, tr, 10000, 0.0001 )
         print "Error: ", tr.minimal_error
         print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations
-        i.set_inputs( training_data[0][0] )
-        i.process()
-        print o.get_outputs()
-        i.set_inputs( training_data[1][0] )
-        i.process()
-        print o.get_outputs()
-        i.set_inputs( training_data[2][0] )
-        i.process()
-        print o.get_outputs()
-        i.set_inputs( training_data[3][0] )
-        i.process()
-        print o.get_outputs()
+
+        for t in training_data:
+            i.set_inputs( t[0] )
+            i.process()
+            print o.get_outputs()
 
 if __name__ == '__main__':
     cProfile.run( 'test( )', 'test_prof' )

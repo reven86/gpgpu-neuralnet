@@ -175,7 +175,7 @@ class OpenCL( object ):
             }
             
             __kernel void calc_conjugate_gradient_beta(
-                __global const float * layer_gradient,
+                __global const float * gradient,
                 __global const float * prev_gradient,
                 int num_components,
                 __local float * partial_sum_up,
@@ -189,7 +189,7 @@ class OpenCL( object ):
                 float down = 0.0f;
                 for (uint x = lid; x < num_components; x += get_local_size(0))
                 {
-                    up += layer_gradient[ x ] * ( layer_gradient[ x ] - prev_gradient[ x ] );
+                    up += gradient[ x ] * ( gradient[ x ] - prev_gradient[ x ] );
                     down += prev_gradient[ x ] * prev_gradient[ x ];
                 }
 
@@ -207,23 +207,20 @@ class OpenCL( object ):
                 }
                 
                 if( get_global_id( 0 ) == 0 )
-                {
-                    beta[ 0 ] = max( 0.0f, partial_sum_up[ 0 ] / partial_sum_down[ 0 ] );
-                    if( fabs( beta[ 0 ] ) > 1e+4 )
-                        beta[ 0 ] = 0.0f;
-                }
+                    beta[ 0 ] = fabs( partial_sum_down[ 0 ] ) < 1e-15 ? 0.0 : max( 0.0f, partial_sum_up[ 0 ] / partial_sum_down[ 0 ] );
             }
             
             __kernel void calc_conjugate_gradient_direction(
                 __global const float * layer_gradient,
-                __global const float * prev_direction,
                 __global const float * beta,
-                __global float * direction
+                __global float * direction,
+                __global float * prev_gradient
                 )
             {
                 int gid = get_global_id( 0 );
                 
-                direction[ gid ] = layer_gradient[ gid ] - beta[ 0 ] * prev_direction[ gid ];
+                prev_gradient[ gid ] = layer_gradient[ gid ];               
+                direction[ gid ] = layer_gradient[ gid ] + beta[ 0 ] * direction[ gid ];
             }
             """ ).build()
 
