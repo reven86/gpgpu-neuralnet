@@ -18,15 +18,16 @@ def test():
     i.link_next( o, 0, 2 )
     #h1.link_next( o, 0, 1000 )
     #h2.link_next( o, 0, 10 )
-    i.finilize_links()
+    ncc = ExecutionContext( i, o, allow_training = True )
 
-    #i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
-    #o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
-    i.set_weights( numpy.array( ( 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 ), numpy.float32 ) )
-    o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
+    i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
+    o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
+    #i.set_weights( numpy.array( ( 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 ), numpy.float32 ) )
+    #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    gd = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
+    m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
+    #m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
@@ -34,10 +35,12 @@ def test():
         ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         )
 
-    #gd.randomize_weights( i )
+    #m.randomize_weights( i )
 
-    for it in range( 100 ):
-        gd.start_training( i, o, training_data, tr, 10000 )
+    # GradientDescent - 10007 iterations to convergence
+
+    for it in range( 3 ):
+        m.start_training( ncc, training_data, tr, 10000 )
         print "Error: ", tr.minimal_error
         print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations
