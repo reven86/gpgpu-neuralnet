@@ -26,21 +26,22 @@ def test():
     #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    #m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
-    m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
+    m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
+    #m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
         ( numpy.array( ( 1.0, 0.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
-        ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.8, ), numpy.float32 ) ),
+        ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         )
 
     #m.randomize_weights( nnc )
 
     # GradientDescent - 10007 iterations to convergence
+    # ConjugateGradient - >30000 iterations to convergence (bug??)
 
     for it in range( 3 ):
-        m.start_training( nnc, training_data, tr, 10000, 0.0001 )
+        m.start_training( nnc, training_data, tr, 10000 )
         print "Error: ", tr.minimal_error
         print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations

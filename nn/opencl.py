@@ -207,7 +207,7 @@ class OpenCL( object ):
                 }
                 
                 if( get_global_id( 0 ) == 0 )
-                    beta[ 0 ] = fabs( partial_sum_down[ 0 ] ) < 1e-15 ? 0.0 : max( 0.0f, partial_sum_up[ 0 ] / partial_sum_down[ 0 ] );
+                    beta[ 0 ] = fabs( partial_sum_down[ 0 ] ) < 1e-3 ? 0.0 : max( 0.0f, partial_sum_up[ 0 ] / partial_sum_down[ 0 ] );
             }
             
             __kernel void calc_conjugate_gradient_direction(
