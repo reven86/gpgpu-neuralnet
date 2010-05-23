@@ -8,6 +8,7 @@ from nn.opencl import *
 from nn.layer import *
 from nn.training import *
 import cProfile
+import cPickle
 import csv
 
 def test():
@@ -130,11 +131,18 @@ def test2():
 
     m.randomize_weights( nnc )
 
-    for it in range( 100 ):
-        m.start_training( nnc, training_data, tr, 10 )
+#    with open( 'nn_data_2_26.0728.pk1', 'rb' ) as f:
+#        tr = cPickle.load( f )
+#        tr.apply_weights( nnc )
+
+    for it in range( 500 ):
+        m.start_training( nnc, training_data, tr, 20 )
         print "Error: ", tr.minimal_error
         print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations
+
+        with open( ''.join( ( 'nn_data_', str( tr.iterations ), '_', str( tr.minimal_error ), '.pkl' ) ), 'wb' ) as f:
+            cPickle.dump( tr, f, -1 )
 
         for ti, t in enumerate( training_data ):
             nn_h.set_inputs( t[0] )
