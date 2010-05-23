@@ -14,7 +14,7 @@ class OpenCL( object ):
     computations using OpenCL.
     """
 
-    def __init__( self, opencl_context ):
+    def __init__( self, opencl_context, enable_profiling = False ):
         """
         Constructs OpenCL queue, compiles all programs.
 
@@ -23,15 +23,20 @@ class OpenCL( object ):
             
         Example:
         
-        >>> ocl = OpenCL( pyopencl.create_some_context( ) )
+        >>> ocl = OpenCL( pyopencl.create_some_context( ), enable_profiling = True )
         >>> ocl.program
         <pyopencl._cl.Program object at ...>
         >>> ocl.queue
         <pyopencl._cl.CommandQueue object at ...>
         """
 
+        queue_fl = None
+        if enable_profiling:
+            queue_fl = pyopencl.command_queue_properties.PROFILING_ENABLE
+
         self.context = opencl_context
-        self.queue = pyopencl.CommandQueue( opencl_context )
+        self.queue = pyopencl.CommandQueue( opencl_context, properties = queue_fl )
+        self.profiling_enabled = enable_profiling
         self.program = pyopencl.Program( opencl_context, """
             __constant float beta = 0.66666f;
 
@@ -271,17 +276,43 @@ class OpenCL( object ):
             }
             """ ).build()
 
-        self.kernel_process_layer = self.program.process_layer
-        self.kernel_calc_layer_gradient = self.program.calc_layer_gradient
-        self.kernel_propagate_errors = self.program.propagate_errors
-        self.kernel_setup_training_data = self.program.setup_training_data
-        self.kernel_adjust_weights = self.program.adjust_weights
-        self.kernel_adjust_weights_quickprop = self.program.adjust_weights_quickprop
-        self.kernel_adjust_weights_rprop = self.program.adjust_weights_rprop
-        self.kernel_calc_conjugate_gradient_beta = self.program.calc_conjugate_gradient_beta
-        self.kernel_calc_conjugate_gradient_direction = self.program.calc_conjugate_gradient_direction
+        def profile_decorator( cmd ):
+            def cmd2( *kargs, **kwargs ):
+                self.event_list.append( cmd( *kargs, **kwargs ) )
+                return self.event_list[-1]
+            return cmd2
+
+        self.kernel_process_layer = profile_decorator( self.program.process_layer )
+        self.kernel_calc_layer_gradient = profile_decorator( self.program.calc_layer_gradient )
+        self.kernel_propagate_errors = profile_decorator( self.program.propagate_errors )
+        self.kernel_setup_training_data = profile_decorator( self.program.setup_training_data )
+        self.kernel_adjust_weights = profile_decorator( self.program.adjust_weights )
+        self.kernel_adjust_weights_quickprop = profile_decorator( self.program.adjust_weights_quickprop )
+        self.kernel_adjust_weights_rprop = profile_decorator( self.program.adjust_weights_rprop )
+        self.kernel_calc_conjugate_gradient_beta = profile_decorator( self.program.calc_conjugate_gradient_beta )
+        self.kernel_calc_conjugate_gradient_direction = profile_decorator( self.program.calc_conjugate_gradient_direction )
+
 #        for attr in self.program.all_kernels():
 #            setattr( self, 'kernel_' + attr.get_info( pyopencl.kernel_info.FUNCTION_NAME ), attr )
+
+        pyopencl.enqueue_copy_buffer = profile_decorator( pyopencl.enqueue_copy_buffer )
+        pyopencl.enqueue_read_buffer = profile_decorator( pyopencl.enqueue_read_buffer )
+        pyopencl.enqueue_write_buffer = profile_decorator( pyopencl.enqueue_write_buffer )
+
+        self.event_list = []
+
+    def gather_opencl_time( self ):
+        """
+        Returns time in seconds spent by OpenCL since last call to gather_opencl_time.
+        """
+        res = 0.0;
+        self.queue.finish()
+        for e in self.event_list:
+            res += e.profile.end - e.profile.start
+
+        del self.event_list[:]
+
+        return 1e-9 * res
 
 if __name__ == '__main__':
     import doctest

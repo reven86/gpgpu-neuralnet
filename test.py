@@ -28,10 +28,10 @@ def test():
     #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    #m = GradientDescent( ocl, n = 0.8, alpha = 0.3 )
-    #m = ConjugateGradient( ocl, n = 0.8, alpha = 0.3 )
-    #m = Quickprop( ocl, n = 0.8, alpha = 0.3 )
-    m = RPROP( ocl, n = 0.8 )
+    #m = GradientDescent( n = 0.8, alpha = 0.3 )
+    #m = ConjugateGradient( n = 0.8, alpha = 0.3 )
+    #m = Quickprop( n = 0.8, alpha = 0.3 )
+    m = RPROP( n = 0.8 )
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
@@ -58,7 +58,7 @@ def test():
             print o.get_outputs()
 
 def test2():
-    ocl = OpenCL( pyopencl.create_some_context() )
+    ocl = OpenCL( pyopencl.create_some_context(), enable_profiling = True )
 
     h_count = 600
     d_count = 5
@@ -85,10 +85,10 @@ def test2():
     nnc = ExecutionContext( nn_h, nn_o, allow_training = True )
 
     tr = TrainingResults()
-    m = GradientDescent( ocl )        # 15, 8, 6, 5
-    #m = ConjugateGradient( ocl )    # 31, 31
-    #m = Quickprop( ocl )        # 28
-    #m = RPROP( ocl )            # 24, 24, 24
+    m = GradientDescent( n = 0.5 )        # 15, 8, 6, 5
+    #m = ConjugateGradient( )    # 31, 31
+    #m = Quickprop( )        # 28
+    #m = RPROP( )            # 24, 24, 24
 
     training_data = []
     raw_data = csv.reader( open( 'raw.csv', 'rt' ) )
@@ -131,18 +131,20 @@ def test2():
 
     m.randomize_weights( nnc )
 
-#    with open( 'nn_data_2_26.0728.pk1', 'rb' ) as f:
-#        tr = cPickle.load( f )
+#    with open( 'nn_data_7_2.92699610853.pkl', 'rb' ) as f:
+#        tr, m = cPickle.load( f )
 #        tr.apply_weights( nnc )
 
-    for it in range( 500 ):
-        m.start_training( nnc, training_data, tr, 20 )
+    for it in range( 100 ):
+        m.start_training( nnc, training_data, tr, 1 )
         print "Error: ", tr.minimal_error
         print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations
+        print "OpenCL time: ", tr.opencl_time
+        print "Total time: ", tr.total_time
 
         with open( ''.join( ( 'nn_data_', str( tr.iterations ), '_', str( tr.minimal_error ), '.pkl' ) ), 'wb' ) as f:
-            cPickle.dump( tr, f, -1 )
+            cPickle.dump( ( tr, m ), f, -1 )
 
         for ti, t in enumerate( training_data ):
             nn_h.set_inputs( t[0] )
