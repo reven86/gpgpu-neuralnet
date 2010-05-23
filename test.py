@@ -12,7 +12,7 @@ import cPickle
 import csv
 
 def test():
-    ocl = OpenCL( pyopencl.create_some_context() )
+    ocl = OpenCL( pyopencl.create_some_context(), enable_profiling = True )
     i = InputLayer( 2, ocl )
     h1 = Layer( 1000, ocl )
     h2 = Layer( 10, ocl )
@@ -28,10 +28,10 @@ def test():
     #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    #m = GradientDescent( n = 0.8, alpha = 0.3 )
+    m = GradientDescent()
     #m = ConjugateGradient( n = 0.8, alpha = 0.3 )
     #m = Quickprop( n = 0.8, alpha = 0.3 )
-    m = RPROP( n = 0.8 )
+    #m = RPROP( n = 0.8 )
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
@@ -51,6 +51,8 @@ def test():
         print "Error: ", tr.minimal_error
         print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations
+        print "OpenCL time: ", tr.opencl_time
+        print "Total time: ", tr.total_time
 
         for t in training_data:
             i.set_inputs( t[0] )
@@ -156,4 +158,4 @@ def test2():
                 break;
 
 if __name__ == '__main__':
-    cProfile.run( 'test2( )', 'test_prof' )
+    cProfile.run( 'test( )', 'test_prof' )

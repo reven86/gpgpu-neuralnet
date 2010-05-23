@@ -37,7 +37,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 
     Example of training neural network by gradiend descent method
 >>> tr.reset( )
->>> m = GradientDescent( ocl, n = 0.5, alpha = 0.3 )
+>>> m = GradientDescent( n = 0.5, alpha = 0.3 )
 >>> training_data = (
 ... ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
 ... ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
@@ -51,7 +51,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 >>> tr.iterations
 10
 >>> tr.minimal_error
-1.4140973
+0.70704865829365293
 >>> tr.optimal_weights
 array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
          6.96000719, -10.4599905 ,  -3.22179294, -10.19824028,
@@ -60,13 +60,13 @@ array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
 
     Example of training neural network by conjugate gradient method
 >>> tr.reset( )
->>> m = ConjugateGradient( ocl, n = 0.5, alpha = 0.3 )
+>>> m = ConjugateGradient( n = 0.5, alpha = 0.3 )
 >>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-1.4140973
+0.70704865829365293
 >>> tr.optimal_weights
 array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
          6.96000719, -10.4599905 ,  -3.22179294, -10.19824028,
@@ -75,13 +75,13 @@ array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
 
     Example of training neural network by Quickprop method
 >>> tr.reset( )
->>> m = Quickprop( ocl, n = 0.5, alpha = 0.3 )
+>>> m = Quickprop( n = 0.5, alpha = 0.3 )
 >>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-1.4141175
+0.7070587532215965
 >>> tr.optimal_weights
 array([ -3.22005892, -10.19999981,   5.5999999 ,  -2.96982789,
          6.96000195, -10.45999813,  -3.22009492, -10.19991112,
@@ -90,18 +90,18 @@ array([ -3.22005892, -10.19999981,   5.5999999 ,  -2.96982789,
          
     Example of training neural network by RPROP method
 >>> tr.reset( )
->>> m = RPROP( ocl, n = 0.5 )
+>>> m = RPROP( n = 0.5 )
 >>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.012369672
+0.013184274770666412
 >>> tr.optimal_weights
-array([ -0.72000027,  -9.69999981,   6.0999999 ,  -3.66999984,
-         6.96000004, -10.96000004,  -6.4800005 ,  -6.93999863,
-        13.94000244,  -8.05000114,  12.04000187,  -5.37999821,
-         5.66673517,   1.92594624,   3.74237275], dtype=float32)
+array([ -2.84500003, -10.69999981,   5.0999999 ,  -2.07781243,
+         7.96000004,  -9.46000004,  -4.47875023,  -8.94124889,
+         6.85874987,  -4.21750069,   8.2074995 ,  -9.21250057,
+         4.84013557,   2.79954219,   2.4539876 ], dtype=float32)
 """
 
 import numpy
@@ -393,13 +393,21 @@ class ConjugateGradient( TrainingMethod ):
             local_size = ( 64, )
             )
 
+#        test1 = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        pyopencl.enqueue_read_buffer( context.opencl.queue, context.gradient_buf, test1, is_blocking = True )
+#        test2 = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        pyopencl.enqueue_read_buffer( context.opencl.queue, self.prev_gradient_buf, test1, is_blocking = True )
+#
+#        beta = numpy.float32( ( test1 * ( test1 - test2 ) ).sum() / ( test2 * test2 ).sum() )
+#        pyopencl.enqueue_write_buffer( context.opencl.queue, self.beta_buf, numpy.array( [beta], numpy.float32 ), is_blocking = True )
+
+#        test = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        pyopencl.enqueue_read_buffer( context.opencl.queue, self.beta_buf, test, is_blocking = True )
+
         self.iteration_count += 1
         if self.iteration_count > context.total_neurons:
             pyopencl.enqueue_write_buffer( context.opencl.queue, self.beta_buf, numpy.zeros( [1], numpy.float32 ), is_blocking = True )
             self.iteration_count = 0
-
-#        test = numpy.ndarray( [ context.total_weights ], numpy.float32 )
-#        pyopencl.enqueue_read_buffer( context.opencl.queue, self.beta_buf, test, is_blocking = True )
 
         context.opencl.kernel_calc_conjugate_gradient_direction( 
             context.opencl.queue, ( context.total_weights, ),

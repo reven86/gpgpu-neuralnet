@@ -30,7 +30,7 @@ class OpenCL( object ):
         <pyopencl._cl.CommandQueue object at ...>
         """
 
-        queue_fl = None
+        queue_fl = 0
         if enable_profiling:
             queue_fl = pyopencl.command_queue_properties.PROFILING_ENABLE
 
@@ -277,10 +277,13 @@ class OpenCL( object ):
             """ ).build()
 
         def profile_decorator( cmd ):
-            def cmd2( *kargs, **kwargs ):
-                self.event_list.append( cmd( *kargs, **kwargs ) )
-                return self.event_list[-1]
-            return cmd2
+            if self.profiling_enabled:
+                def cmd2( *kargs, **kwargs ):
+                    evt = cmd( *kargs, **kwargs )
+                    self.event_list.append( evt )
+                    return evt
+                return cmd2
+            return cmd
 
         self.kernel_process_layer = profile_decorator( self.program.process_layer )
         self.kernel_calc_layer_gradient = profile_decorator( self.program.calc_layer_gradient )
