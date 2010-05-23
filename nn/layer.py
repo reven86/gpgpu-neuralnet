@@ -193,6 +193,17 @@ class Layer( object ):
             )
         return weights
 
+    def get_inputs( self ):
+        """
+        Returns inputs.
+        """
+        inputs = numpy.ndarray( [ self.inputs_per_neuron - 1 ], numpy.float32 )
+        pyopencl.enqueue_read_buffer( 
+            self.opencl.queue, self.context.inputs_buf, inputs,
+            device_offset = self.inputs_offset * 4, is_blocking = True
+            )
+        return inputs
+
     def get_outputs( self ):
         """
         Wait for outputs.
@@ -326,7 +337,7 @@ class InputLayer( Layer ):
         """
         pyopencl.enqueue_write_buffer( 
             self.opencl.queue, self.context.inputs_buf, inputs,
-            device_offset = self.inputs_offset, is_blocking = is_blocking
+            device_offset = self.inputs_offset * 4, is_blocking = is_blocking
             )
 
     def process( self ):

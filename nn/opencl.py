@@ -177,7 +177,7 @@ class OpenCL( object ):
             __kernel void adjust_weights_quickprop(
                 __global const float * direction,
                 __global const float * prev_direction,
-                float n, float alpha, float gamma,
+                float n, float alpha,
                 __global float * old_delta,
                 __global float * weights
                 )
@@ -193,6 +193,32 @@ class OpenCL( object ):
                 
                 weights[ gid ] += new_delta;
                 old_delta[ gid ] = new_delta;
+            }
+            
+            __kernel void adjust_weights_rprop(
+                __global const float * gradient,
+                __global const float * prev_gradient,
+                __global float * n,
+                __global float * weights
+                )
+            {
+                int gid = get_global_id( 0 );
+                
+                if( fabs( gradient[ gid ] ) < 1e-6f )
+                    return;
+                
+                float new_delta;
+                float factor = prev_gradient[ gid ] * gradient[ gid ];
+                
+                const float a = 1.2f;
+                const float b = 0.5f;
+                
+                if( factor > 1e-6f )
+                    n[ gid ] = min( a * n[ gid ], 50.0f );
+                else if ( factor < -1e-6f )
+                    n[ gid ] = max( b * n[ gid ], 1e-6f );
+                
+                weights[ gid ] += n[ gid ] * ( gradient[ gid ] > 0.0f ? -1.0f : 1.0f );
             }
             
             __kernel void calc_conjugate_gradient_beta(
@@ -251,6 +277,7 @@ class OpenCL( object ):
         self.kernel_setup_training_data = self.program.setup_training_data
         self.kernel_adjust_weights = self.program.adjust_weights
         self.kernel_adjust_weights_quickprop = self.program.adjust_weights_quickprop
+        self.kernel_adjust_weights_rprop = self.program.adjust_weights_rprop
         self.kernel_calc_conjugate_gradient_beta = self.program.calc_conjugate_gradient_beta
         self.kernel_calc_conjugate_gradient_direction = self.program.calc_conjugate_gradient_direction
 #        for attr in self.program.all_kernels():
