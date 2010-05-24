@@ -100,14 +100,15 @@ class OpenCL( object ):
                 int input_index = gid % inputs_per_neuron;
                 int error_index = gid / inputs_per_neuron;
                 
-                if( input_index == 0 )
-                    gradient[ gid + grad_ofs ] = errors[ errors_ofs + error_index ];
-                else
-                    gradient[ gid + grad_ofs ] = inputs[ inputs_ofs + input_index - 1 ] * errors[ errors_ofs + error_index ];
+                float err = errors[ errors_ofs + error_index ];
+                if( input_index != 0 )
+                    err *= inputs[ inputs_ofs + input_index - 1 ];
+
+                gradient[ gid + grad_ofs ] = err;
             }
             
             __kernel void propagate_errors(
-                __global const float * errors,
+                __global float * errors,
                 __global const float * weights,
                 int errors_ofs,
                 int ofs, int count,
@@ -115,8 +116,7 @@ class OpenCL( object ):
                 int weights_offset,
                 int inputs_per_neuron,
                 __local float * partial_sum,
-                __global const float * outputs,
-                __global float * new_errors
+                __global const float * outputs
                 )
             {
                 for (uint y = get_group_id(0); y < count; y += get_num_groups(0))
@@ -141,7 +141,7 @@ class OpenCL( object ):
                     if (lid == 0)
                     {
                         float output = outputs[ y + ofs ];
-                        new_errors[ y + ofs ] = partial_sum[ 0 ] * beta * ( 1.0f - output * output );
+                        errors[ y + ofs ] += partial_sum[ 0 ] * beta * ( 1.0f - output * output );
                     }
 
                     barrier(CLK_LOCAL_MEM_FENCE);
@@ -151,6 +151,7 @@ class OpenCL( object ):
             __kernel void setup_training_data(
                 __global const float * real_outputs,
                 int real_outputs_ofs,
+                int real_outputs_count,
                 __global const float * target_outputs,
                 __global float * errors,
                 __global float * total_errors
@@ -158,10 +159,16 @@ class OpenCL( object ):
             {
                 int gid = get_global_id( 0 );
                 
-                float err = real_outputs[ gid + real_outputs_ofs ] - target_outputs[ gid ];
-                total_errors[ gid ] += err * err;
+                if( gid < real_outputs_ofs || gid >= real_outputs_ofs + real_outputs_count )
+                {
+                    errors[ gid ] = 0.0f;
+                    return;
+                }
                 
-                errors[ gid + real_outputs_ofs ] = err * beta * ( 1.0f - real_outputs[ gid + real_outputs_ofs ] * real_outputs[ gid + real_outputs_ofs ] );
+                float err = real_outputs[ gid ] - target_outputs[ gid - real_outputs_ofs ];
+                total_errors[ gid - real_outputs_ofs ] += err * err;
+                
+                errors[ gid ] = err * beta * ( 1.0f - real_outputs[ gid ] * real_outputs[ gid ] );
             }
 
             __kernel void adjust_weights(
@@ -311,7 +318,8 @@ class OpenCL( object ):
         res = 0.0;
         self.queue.finish()
         for e in self.event_list:
-            res += e.profile.end - e.profile.start
+            # event.profile works too slow
+            res += e.get_profiling_info( pyopencl.profiling_info.END ) - e.get_profiling_info( pyopencl.profiling_info.START )
 
         del self.event_list[:]
 

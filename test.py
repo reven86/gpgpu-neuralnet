@@ -87,7 +87,7 @@ def test2():
     nnc = ExecutionContext( nn_h, nn_o, allow_training = True )
 
     tr = TrainingResults()
-    m = GradientDescent( n = 0.5 )        # 15, 8, 6, 5
+    m = GradientDescent()        # 15, 8, 6, 5
     #m = ConjugateGradient( )    # 31, 31
     #m = Quickprop( )        # 28
     #m = RPROP( )            # 24, 24, 24
@@ -132,15 +132,19 @@ def test2():
         prev_line = raw_line
 
     m.randomize_weights( nnc )
+    del training_data[10:]
 
-#    with open( 'nn_data_7_2.92699610853.pkl', 'rb' ) as f:
+#    with open( 'nn_data_9970_0.00999976415128.pkl', 'rb' ) as f:
 #        tr, m = cPickle.load( f )
 #        tr.apply_weights( nnc )
 
-    for it in range( 100 ):
+    tr.minimal_error = 1e12
+    tr.opencl_time = 0.0
+    tr.total_time = 0.0
+
+    for it in range( 1 ):
         m.start_training( nnc, training_data, tr, 1 )
         print "Error: ", tr.minimal_error
-        print "Weights: ", tr.optimal_weights
         print "Iterations: ", tr.iterations
         print "OpenCL time: ", tr.opencl_time
         print "Total time: ", tr.total_time
@@ -158,4 +162,4 @@ def test2():
                 break;
 
 if __name__ == '__main__':
-    cProfile.run( 'test( )', 'test_prof' )
+    cProfile.run( 'test2( )', 'test_prof' )

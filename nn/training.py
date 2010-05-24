@@ -52,11 +52,6 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 10
 >>> tr.minimal_error
 0.70704865829365293
->>> tr.optimal_weights
-array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
-         6.96000719, -10.4599905 ,  -3.22179294, -10.19824028,
-         5.60174894,  -2.97676086,   6.96663904, -10.45340729,
-         4.8402071 ,   1.58020127,   3.14647174], dtype=float32)
 
     Example of training neural network by conjugate gradient method
 >>> tr.reset( )
@@ -67,11 +62,6 @@ array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
 0.70704865829365293
->>> tr.optimal_weights
-array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
-         6.96000719, -10.4599905 ,  -3.22179294, -10.19824028,
-         5.60174894,  -2.97676086,   6.96663904, -10.45340729,
-         4.8402071 ,   1.58020127,   3.14647174], dtype=float32)
 
     Example of training neural network by Quickprop method
 >>> tr.reset( )
@@ -82,11 +72,6 @@ array([ -3.22067547, -10.19999981,   5.5999999 ,  -2.96802545,
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
 0.7070587532215965
->>> tr.optimal_weights
-array([ -3.22005892, -10.19999981,   5.5999999 ,  -2.96982789,
-         6.96000195, -10.45999813,  -3.22009492, -10.19991112,
-         5.60008574,  -2.97036433,   6.96034002, -10.45966911,
-         4.83914328,   1.57822061,   3.15191698], dtype=float32)
          
     Example of training neural network by RPROP method
 >>> tr.reset( )
@@ -97,11 +82,6 @@ array([ -3.22005892, -10.19999981,   5.5999999 ,  -2.96982789,
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
 0.013184274770666412
->>> tr.optimal_weights
-array([ -2.84500003, -10.69999981,   5.0999999 ,  -2.07781243,
-         7.96000004,  -9.46000004,  -4.47875023,  -8.94124889,
-         6.85874987,  -4.21750069,   8.2074995 ,  -9.21250057,
-         4.84013557,   2.79954219,   2.4539876 ], dtype=float32)
 """
 
 import numpy
@@ -138,7 +118,7 @@ class TrainingResults( object ):
         """
         Stores list of layers weights for entire neural network.
         """
-        self.optimal_weights = numpy.ndarray( [context.total_weights], numpy.float32 )
+        self.optimal_weights = numpy.ndarray( [context.weights_buf_size], numpy.float32 )
         pyopencl.enqueue_read_buffer( context.opencl.queue, context.weights_buf, self.optimal_weights, is_blocking = True )
 
     def apply_weights( self, context ):
@@ -187,9 +167,9 @@ class TrainingMethod( object ):
         Initialize weights of layer by random values
         """
 
-        weights = numpy.random.rand( context.total_weights ).astype( numpy.float32 )
+        weights = numpy.random.rand( context.weights_buf_size ).astype( numpy.float32 )
         weights -= 0.5
-        weights *= 4.0 / numpy.sqrt( numpy.float32( context.total_weights / context.total_neurons ) )
+        weights *= 4.0 / numpy.sqrt( numpy.float32( context.weights_buf_size / context.neurons_buf_size ) )
 
         pyopencl.enqueue_write_buffer( context.opencl.queue, context.weights_buf, weights, is_blocking = True )
 
@@ -218,7 +198,7 @@ class TrainingMethod( object ):
 
         self.weights_delta_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ 0.0 for x in range( context.total_weights ) ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
             )
 
     def start_training( self, context, training_data, training_results,
@@ -251,7 +231,7 @@ class TrainingMethod( object ):
         outputs_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_ONLY, context.output_layer.neuron_count * 4 )
         total_error_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_WRITE, context.output_layer.neuron_count * 4 )
 
-        total_error = numpy.array( [ 0.0 for x in range( context.output_layer.neuron_count ) ], numpy.float32 )
+        total_error = numpy.zeros( [ context.output_layer.neuron_count ], numpy.float32 )
 
         zero_buf = pyopencl.Buffer( 
             context.opencl.context,
@@ -271,9 +251,10 @@ class TrainingMethod( object ):
 
                 pyopencl.enqueue_write_buffer( context.opencl.queue, outputs_buf, outputs, is_blocking = False )
                 context.opencl.kernel_setup_training_data( 
-                    context.opencl.queue, ( context.output_layer.neuron_count, ),
+                    context.opencl.queue, ( context.neurons_buf_size, ),
                     context.outputs_buf,
                     numpy.int32( context.output_layer.neurons_offset ),
+                    numpy.int32( context.output_layer.neuron_count ),
                     outputs_buf,
                     context.errors_backpropagation_buf,
                     total_error_buf
@@ -309,7 +290,7 @@ class TrainingMethod( object ):
         dir = self.get_weights_direction_buf( context ) #this call should always return opposite direction
 
         context.opencl.kernel_adjust_weights( 
-            context.opencl.queue, ( context.total_weights, ),
+            context.opencl.queue, ( context.weights_buf_size, ),
             dir,
             self.n, self.alpha,
             self.weights_delta_buf,
@@ -359,11 +340,11 @@ class ConjugateGradient( TrainingMethod ):
 
         self.direction_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ 0.0 for x in range( context.total_weights ) ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
             )
         self.prev_gradient_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ 0.01 for x in range( context.total_weights ) ], numpy.float32 )
+            hostbuf = numpy.array( [ 0.01 ] * context.weights_buf_size, numpy.float32 )
             )
 
         #1 float beta coefficient
@@ -386,22 +367,22 @@ class ConjugateGradient( TrainingMethod ):
             context.opencl.queue, ( 64, ),
             context.gradient_buf,
             self.prev_gradient_buf,
-            numpy.int32( context.total_weights ),
+            numpy.int32( context.weights_buf_size ),
             pyopencl.LocalMemory( 256 ),
             pyopencl.LocalMemory( 256 ),
             self.beta_buf,
             local_size = ( 64, )
             )
 
-#        test1 = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        test1 = numpy.ndarray( [ context.weights_buf_size ], numpy.float32 )
 #        pyopencl.enqueue_read_buffer( context.opencl.queue, context.gradient_buf, test1, is_blocking = True )
-#        test2 = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        test2 = numpy.ndarray( [ context.weights_buf_size ], numpy.float32 )
 #        pyopencl.enqueue_read_buffer( context.opencl.queue, self.prev_gradient_buf, test1, is_blocking = True )
 #
 #        beta = numpy.float32( ( test1 * ( test1 - test2 ) ).sum() / ( test2 * test2 ).sum() )
 #        pyopencl.enqueue_write_buffer( context.opencl.queue, self.beta_buf, numpy.array( [beta], numpy.float32 ), is_blocking = True )
 
-#        test = numpy.ndarray( [ context.total_weights ], numpy.float32 )
+#        test = numpy.ndarray( [ context.weights_buf_size ], numpy.float32 )
 #        pyopencl.enqueue_read_buffer( context.opencl.queue, self.beta_buf, test, is_blocking = True )
 
         self.iteration_count += 1
@@ -410,7 +391,7 @@ class ConjugateGradient( TrainingMethod ):
             self.iteration_count = 0
 
         context.opencl.kernel_calc_conjugate_gradient_direction( 
-            context.opencl.queue, ( context.total_weights, ),
+            context.opencl.queue, ( context.weights_buf_size, ),
             context.gradient_buf,
             self.beta_buf,
             self.direction_buf,
@@ -447,7 +428,7 @@ class Quickprop( TrainingMethod ):
 
         self.prev_direction_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ 0.0 for x in range( context.total_weights ) ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
             )
 
     def __getstate__( self ):
@@ -460,7 +441,7 @@ class Quickprop( TrainingMethod ):
         Adjust weights of neural network by certain direction.
         """
         context.opencl.kernel_adjust_weights_quickprop( 
-            context.opencl.queue, ( context.total_weights, ),
+            context.opencl.queue, ( context.weights_buf_size, ),
             context.gradient_buf,
             self.prev_direction_buf,
             self.n, self.alpha,
@@ -500,11 +481,11 @@ class RPROP( TrainingMethod ):
 
         self.n_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ self.n for x in range( context.total_weights ) ], numpy.float32 )
+            hostbuf = numpy.array( [ self.n ] * context.weights_buf_size, numpy.float32 )
             )
         self.prev_gradient_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ 0.0 for x in range( context.total_weights ) ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
             )
 
     def __getstate__( self ):
@@ -518,14 +499,14 @@ class RPROP( TrainingMethod ):
         Adjust weights of neural network by certain direction.
         """
         context.opencl.kernel_adjust_weights_rprop( 
-            context.opencl.queue, ( context.total_weights, ),
+            context.opencl.queue, ( context.weights_buf_size, ),
             context.gradient_buf,
             self.prev_gradient_buf,
             self.n_buf,
             context.weights_buf
             )
 
-        #nn = numpy.ndarray( [context.total_weights], numpy.float32 )
+        #nn = numpy.ndarray( [context.weights_buf_size], numpy.float32 )
         #pyopencl.enqueue_read_buffer( context.opencl.queue, context.gradient_buf, nn, is_blocking = True )
         #pyopencl.enqueue_read_buffer( context.opencl.queue, self.n_buf, nn, is_blocking = True )
 

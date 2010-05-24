@@ -92,6 +92,12 @@ class ExecutionContext( object ):
         self.total_weights = 0
         self.total_inputs = 0       # total inputs to neurons, without polarization link
 
+        # following variables define actual items count in buffers and may differ from
+        # total_* variables due to alignment issues
+        self.neurons_buf_size = 0
+        self.weights_buf_size = 0
+        self.inputs_buf_size = 0
+
         ll = [ input_layer ]
 
         while ll:
@@ -99,15 +105,19 @@ class ExecutionContext( object ):
 
             #process layer
             l.weights_count = l.neuron_count * l.inputs_per_neuron
-            l.weights_offset = self.total_weights
-            l.neurons_offset = self.total_neurons
-            l.inputs_offset = self.total_inputs
+            l.weights_offset = self.weights_buf_size
+            l.neurons_offset = self.neurons_buf_size
+            l.inputs_offset = self.inputs_buf_size
             l.context = self
             l.processed = True
 
             self.total_weights += l.weights_count
             self.total_neurons += l.neuron_count
             self.total_inputs += l.inputs_per_neuron - 1
+
+            self.neurons_buf_size += 16 * ( 1 + l.neuron_count // 16 )
+            self.weights_buf_size += 16 * ( 1 + l.weights_count // 16 )
+            self.inputs_buf_size += 16 * ( 1 + ( l.inputs_per_neuron - 1 ) // 16 )
 
             for k in l.next_layers:
                 if k[0].processed == False:
@@ -120,13 +130,32 @@ class ExecutionContext( object ):
         else:
             fl = pyopencl.mem_flags.READ_ONLY
 
-        self.inputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_ONLY, self.total_inputs * 4 )
-        self.outputs_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.WRITE_ONLY, self.total_neurons * 4 )
-        self.weights_buf = pyopencl.Buffer( self.opencl.context, fl, self.total_weights * 4 )
+        self.inputs_buf = pyopencl.Buffer( 
+            self.opencl.context,
+            pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.zeros( [self.inputs_buf_size], numpy.float32 )
+            )
+        self.outputs_buf = pyopencl.Buffer( 
+            self.opencl.context,
+            pyopencl.mem_flags.WRITE_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.zeros( [self.neurons_buf_size], numpy.float32 )
+            )
+        self.weights_buf = pyopencl.Buffer( 
+            self.opencl.context, fl | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.zeros( [self.weights_buf_size], numpy.float32 )
+            )
 
         if allow_training:
-            self.gradient_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.total_weights * 4 )
-            self.errors_backpropagation_buf = pyopencl.Buffer( self.opencl.context, pyopencl.mem_flags.READ_WRITE, self.total_neurons * 4 )
+            self.gradient_buf = pyopencl.Buffer( 
+                self.opencl.context,
+                pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = numpy.zeros( [self.weights_buf_size], numpy.float32 )
+                )
+            self.errors_backpropagation_buf = pyopencl.Buffer( 
+                self.opencl.context,
+                pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = numpy.zeros( [self.neurons_buf_size], numpy.float32 )
+                )
 
 class Layer( object ):
     """
@@ -153,7 +182,7 @@ class Layer( object ):
         self.processed = False
         self.inputs_per_neuron = 1      # polarization input is always exists
 
-    def link_next( self, next_layer, this_start_neuron, this_neurons_count ):
+    def link_next( self, next_layer, this_start_neuron = 0, this_neurons_count = -1 ):
         """
         Links this layer with next layer.
         
@@ -162,13 +191,15 @@ class Layer( object ):
             will be linked with all neurons from next layer, each with each.
         @param this_start_neuron, this_neurons_count
             Range of neurons that will be linked with next layer.
-                        
-        @see finilize_links
         """
 
-        self.next_layers.append( ( next_layer, this_start_neuron, this_neurons_count ) )
-        next_layer.prev_layers.append( ( self, this_start_neuron, this_neurons_count ) )
-        next_layer.inputs_per_neuron += this_neurons_count
+        nc = this_neurons_count
+        if nc < 0:
+            nc = self.neuron_count
+
+        self.next_layers.append( ( next_layer, this_start_neuron, nc ) )
+        next_layer.prev_layers.append( ( self, this_start_neuron, nc ) )
+        next_layer.inputs_per_neuron += nc
 
     def set_weights( self, weights ):
         """
@@ -276,8 +307,8 @@ class Layer( object ):
             if not l[0].processed:
                 l[0].calc_weights_gradient()
 
-#        err = numpy.ndarray( [ self.context.total_neurons ], numpy.float32 )
-#        grad = numpy.ndarray( [ self.context.total_weights ], numpy.float32 )
+#        err = numpy.ndarray( [ self.context.neurons_buf_size ], numpy.float32 )
+#        grad = numpy.ndarray( [ self.context.weights_buf_size ], numpy.float32 )
 
         self.opencl.kernel_calc_layer_gradient( 
             self.opencl.queue, ( self.weights_count, ),
@@ -306,7 +337,6 @@ class Layer( object ):
                 numpy.int32( self.inputs_per_neuron ),
                 pyopencl.LocalMemory( 256 ),
                 self.context.outputs_buf,
-                self.context.errors_backpropagation_buf,
                 local_size = ( 64, )
             )
             i_s += l[2]
