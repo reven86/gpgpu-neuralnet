@@ -162,4 +162,4 @@ def test2():
                 break;
 
 if __name__ == '__main__':
-    cProfile.run( 'test2( )', 'test_prof' )
+    cProfile.run( 'test( )', 'test_prof' )

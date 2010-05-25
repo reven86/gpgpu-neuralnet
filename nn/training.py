@@ -228,8 +228,8 @@ class TrainingMethod( object ):
 
         self.prepare_training( context )
 
-        outputs_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_ONLY, context.output_layer.neuron_count * 4 )
-        total_error_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_WRITE, context.output_layer.neuron_count * 4 )
+        outputs_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_ONLY, int( context.output_layer.neuron_count * 4 ) )
+        total_error_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_WRITE, int( context.output_layer.neuron_count * 4 ) )
 
         total_error = numpy.zeros( [ context.output_layer.neuron_count ], numpy.float32 )
 
@@ -251,10 +251,10 @@ class TrainingMethod( object ):
 
                 pyopencl.enqueue_write_buffer( context.opencl.queue, outputs_buf, outputs, is_blocking = False )
                 context.opencl.kernel_setup_training_data( 
-                    context.opencl.queue, ( context.neurons_buf_size, ),
+                    context.opencl.queue, ( int( context.neurons_buf_size ), ),
                     context.outputs_buf,
-                    numpy.int32( context.output_layer.neurons_offset ),
-                    numpy.int32( context.output_layer.neuron_count ),
+                    context.output_layer.neurons_offset,
+                    context.output_layer.neuron_count,
                     outputs_buf,
                     context.errors_backpropagation_buf,
                     total_error_buf
@@ -290,7 +290,7 @@ class TrainingMethod( object ):
         dir = self.get_weights_direction_buf( context ) #this call should always return opposite direction
 
         context.opencl.kernel_adjust_weights( 
-            context.opencl.queue, ( context.weights_buf_size, ),
+            context.opencl.queue, ( int( context.weights_buf_size ), ),
             dir,
             self.n, self.alpha,
             self.weights_delta_buf,
@@ -391,7 +391,7 @@ class ConjugateGradient( TrainingMethod ):
             self.iteration_count = 0
 
         context.opencl.kernel_calc_conjugate_gradient_direction( 
-            context.opencl.queue, ( context.weights_buf_size, ),
+            context.opencl.queue, ( int( context.weights_buf_size ), ),
             context.gradient_buf,
             self.beta_buf,
             self.direction_buf,
@@ -441,7 +441,7 @@ class Quickprop( TrainingMethod ):
         Adjust weights of neural network by certain direction.
         """
         context.opencl.kernel_adjust_weights_quickprop( 
-            context.opencl.queue, ( context.weights_buf_size, ),
+            context.opencl.queue, ( int( context.weights_buf_size ), ),
             context.gradient_buf,
             self.prev_direction_buf,
             self.n, self.alpha,
@@ -499,7 +499,7 @@ class RPROP( TrainingMethod ):
         Adjust weights of neural network by certain direction.
         """
         context.opencl.kernel_adjust_weights_rprop( 
-            context.opencl.queue, ( context.weights_buf_size, ),
+            context.opencl.queue, ( int( context.weights_buf_size ), ),
             context.gradient_buf,
             self.prev_gradient_buf,
             self.n_buf,

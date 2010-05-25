@@ -283,13 +283,20 @@ class OpenCL( object ):
             }
             """ ).build()
 
+        ocl = self
+
         def profile_decorator( cmd ):
             if self.profiling_enabled:
-                def cmd2( *kargs, **kwargs ):
-                    evt = cmd( *kargs, **kwargs )
-                    self.event_list.append( evt )
-                    return evt
-                return cmd2
+                class cmd2( object ):
+                    def __call__( self, *kargs, **kwargs ):
+                        evt = cmd( *kargs, **kwargs )
+                        ocl.event_list.append( evt )
+                        return evt
+                    def set_arg( self, *kargs ):
+                        return cmd.set_arg( *kargs )
+                    def get_kernel( self ):
+                        return cmd
+                return cmd2()
             return cmd
 
         self.kernel_process_layer = profile_decorator( self.program.process_layer )
@@ -310,6 +317,12 @@ class OpenCL( object ):
         pyopencl.enqueue_write_buffer = profile_decorator( pyopencl.enqueue_write_buffer )
 
         self.event_list = []
+
+    def profile_kernel( self, queue, kernel, *kargs, **kwargs ):
+        if self.profiling_enabled:
+            self.event_list.append( pyopencl.enqueue_nd_range_kernel( queue, kernel.get_kernel(), *kargs, **kwargs ) )
+        else:
+            pyopencl.enqueue_nd_range_kernel( queue, kernel, *kargs, **kwargs )
 
     def gather_opencl_time( self ):
         """
