@@ -55,33 +55,33 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 
     Example of training neural network by conjugate gradient method
 >>> tr.reset( )
->>> m = ConjugateGradient( n = 0.5, alpha = 0.3 )
+>>> m = ConjugateGradient( n = 0.5, alpha = 0.3, offline = True )
 >>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.50626325607299805
+0.50631535053253174
 
     Example of training neural network by Quickprop method
 >>> tr.reset( )
->>> m = Quickprop( n = 0.5, alpha = 0.3 )
+>>> m = Quickprop( n = 0.5, alpha = 0.3, offline = True )
 >>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.50629901885986328
+0.5033717155456543
          
     Example of training neural network by RPROP method
 >>> tr.reset( )
->>> m = RPROP( n = 0.5 )
+>>> m = RPROP( n = 0.5, offline = True )
 >>> i.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( -3.22, -10.2, 5.6, -2.97, 6.96, -10.46 ), numpy.float32 ) )
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.0095048630610108376
+0.011453341692686081
 """
 
 import numpy
@@ -136,7 +136,7 @@ class TrainingMethod( object ):
     Can be pickled.
     """
 
-    def __init__( self, n = 0.5, alpha = 0.2, kw = 1.03, pd = 0.7, pi = 1.02 ):
+    def __init__( self, n = 0.5, alpha = 0.2, kw = 1.03, pd = 0.7, pi = 1.02, offline = False ):
         """
         Construct base training method object.
 
@@ -154,6 +154,10 @@ class TrainingMethod( object ):
             
         @param pi
             Auto increase of training coefficient (relative).
+            
+        @param offline
+            Indicates that weights adjustment will be made after computing mean error on all
+            training data.
         """
         self.n = numpy.float32( n )
         self.alpha = numpy.float32( alpha )
@@ -161,6 +165,7 @@ class TrainingMethod( object ):
         self.pd = numpy.float32( pd )
         self.pi = numpy.float32( pi )
         self.last_error = numpy.float32( 0.0 )
+        self.offline = offline
 
     def randomize_weights( self, context ):
         """
@@ -231,14 +236,18 @@ class TrainingMethod( object ):
         outputs_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_ONLY, int( context.output_layer.neuron_count * 4 ) )
         total_error_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_WRITE, 4 )
 
+        zeros = numpy.zeros( [context.weights_buf_size], numpy.float32 )
+        total_error = numpy.array( [1e12], numpy.float32 )
+
+        read_ready_event = None
+
         i = 0
         while training_results.minimal_error > target_error:
             if i >= maximal_iterations:
                 break
             i += 1
 
-            total_error = numpy.zeros( [ 1 ], numpy.float32 )
-            pyopencl.enqueue_write_buffer( context.opencl.queue, total_error_buf, total_error )
+            pyopencl.enqueue_write_buffer( context.opencl.queue, total_error_buf, numpy.zeros( [ 1 ], numpy.float32 ) )
             for inputs, outputs in training_data:
                 context.input_layer.set_inputs( inputs, is_blocking = False )
                 context.input_layer.process()
@@ -260,24 +269,55 @@ class TrainingMethod( object ):
 #                print context.output_layer.get_outputs()
 
                 context.input_layer.calc_weights_gradient()
+
+                if not self.offline:
+                    self.adjust_weights( context )
+                    pyopencl.enqueue_write_buffer( context.opencl.queue, context.gradient_buf, zeros )
+
+            if self.offline:
+                save_n = self.n
+                self.n /= numpy.float32( len( training_data ) )
                 self.adjust_weights( context )
+                self.n = save_n
+                pyopencl.enqueue_write_buffer( context.opencl.queue, context.gradient_buf, zeros )
 
-            pyopencl.enqueue_read_buffer( context.opencl.queue, total_error_buf, total_error, is_blocking = True )
+#            print read_ready_event and read_ready_event.command_execution_status
+            if not read_ready_event or read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
+                # we use unblocking read to avoid waiting for GPU
+                # this could lead to a delay in obtaining current error
+                # error of current iteration can be returned in several iteration ahead
+                read_ready_event = pyopencl.enqueue_read_buffer( 
+                    context.opencl.queue, total_error_buf,
+                    total_error, is_blocking = False
+                    )
+                error_sum = total_error[0] / len( training_data )
 
-            error_sum = total_error[0] / len( training_data )
+                self.adjust_training_parameters( error_sum )
 
-            self.adjust_training_parameters( error_sum )
+                if error_sum < training_results.minimal_error:
+                    training_results.minimal_error = error_sum
+                    training_results.store_weights( context )
 
-            if error_sum < training_results.minimal_error:
-                training_results.minimal_error = error_sum
-                training_results.store_weights( context )
+                if error_sum < target_error:
+                    break;
 
-            if error_sum < target_error:
-                break;
-
-            training_results.opencl_time += context.opencl.gather_opencl_time()
+                training_results.opencl_time += context.opencl.gather_opencl_time()
 
         training_results.iterations += i
+
+        pyopencl.enqueue_read_buffer( 
+            context.opencl.queue, total_error_buf,
+            total_error, is_blocking = True
+            )
+        error_sum = total_error[0] / len( training_data )
+
+        self.adjust_training_parameters( error_sum )
+
+        if error_sum < training_results.minimal_error:
+            training_results.minimal_error = error_sum
+            training_results.store_weights( context )
+
+        training_results.opencl_time += context.opencl.gather_opencl_time()
         training_results.total_time += time.clock() - start_time
 
     def adjust_weights( self, context ):
@@ -434,7 +474,7 @@ class Quickprop( TrainingMethod ):
             )
 
     def __getstate__( self ):
-        odict = super( ConjugateGradient, self ).__getstate__()
+        odict = super( Quickprop, self ).__getstate__()
         del odict['prev_direction_buf']
         return odict
 
@@ -491,7 +531,7 @@ class RPROP( TrainingMethod ):
             )
 
     def __getstate__( self ):
-        odict = super( ConjugateGradient, self ).__getstate__()
+        odict = super( RPROP, self ).__getstate__()
         del odict['n_buf']
         del odict['prev_gradient_buf']
         return odict
@@ -516,7 +556,7 @@ class RPROP( TrainingMethod ):
 
     def adjust_training_parameters( self, error ):
         """
-        Disable parameters adjustment since they interpreted differently.
+        Disable parameters adjustment since they are interpreted differently.
         """
         pass
 

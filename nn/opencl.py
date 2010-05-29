@@ -104,7 +104,7 @@ class OpenCL( object ):
                 if( input_index != 0 )
                     err *= inputs[ inputs_ofs + input_index - 1 ];
 
-                gradient[ gid + grad_ofs ] = err;
+                gradient[ gid + grad_ofs ] += err;
             }
             
             __kernel void propagate_errors(
@@ -347,6 +347,9 @@ class OpenCL( object ):
         """
         Returns time in seconds spent by OpenCL since last call to gather_opencl_time.
         """
+        if not self.profiling_enabled:
+            return 0.0
+
         res = 0.0;
         self.queue.finish()
         for e in self.event_list:
