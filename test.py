@@ -28,10 +28,10 @@ def test():
     #o.set_weights( numpy.array( ( 0.5, 0.5, 0.5 ), numpy.float32 ) )
 
     tr = TrainingResults()
-    m = GradientDescent()
-    #m = ConjugateGradient( n = 0.8, alpha = 0.3 )
-    #m = Quickprop( n = 0.8, alpha = 0.3 )
-    #m = RPROP( n = 0.8 )
+    m = GradientDescent()                # 4336
+    #m = ConjugateGradient()             # 5
+    #m = Quickprop()                     #
+    #m = RPROP()
     training_data = ( 
         ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
         ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
@@ -92,6 +92,7 @@ def test2():
     #m = Quickprop( )        # 28
     #m = RPROP( )            # 24, 24, 24
 
+    dates = []
     training_data = []
     raw_data = csv.reader( open( 'raw.csv', 'rt' ) )
     real_data_i = csv.writer( open( 'training_i.csv', 'wb' ) )
@@ -104,7 +105,7 @@ def test2():
             data_bucket.extend( numpy.array( map( float, raw_line[-5:] ), numpy.float32 ) / numpy.array( map( float, prev_line[-5:] ), numpy.float32 ) )
             if len( data_bucket ) > nn_h.neuron_count:
                 test_bucket.fill( 0.0 )
-                if data_bucket[-2] > 1.01:
+                if data_bucket[-2] > 1.007:
                     test_bucket[0] = 1.0
                 if data_bucket[-2] > 1.005:
                     test_bucket[1] = 1.0
@@ -122,44 +123,54 @@ def test2():
                     test_bucket[7] = 1.0
                 if data_bucket[-2] < 0.995:
                     test_bucket[8] = 1.0
-                if data_bucket[-2] < 0.99:
+                if data_bucket[-2] < 0.993:
                     test_bucket[9] = 1.0
                 training_data.append( ( ( numpy.array( data_bucket[:-5], numpy.float32 ) - 1.0 ) * 20, test_bucket.copy() ) )
                 data_bucket = data_bucket[5:]
                 real_data_i.writerow( training_data[-1][0] )
                 real_data_o.writerow( test_bucket )
+                dates.append( raw_line[ 0 ] )
 
         prev_line = raw_line
 
     m.randomize_weights( nnc )
-    del training_data[10:]
+    #del training_data[:200]
+    #del dates[:200]
 
-#    with open( 'nn_data_9970_0.00999976415128.pkl', 'rb' ) as f:
-#        tr, m = cPickle.load( f )
-#        tr.apply_weights( nnc )
+    with open( 'nn_data_13450_0.0861941843322.pkl', 'rb' ) as f:
+        tr, m = cPickle.load( f )
+        tr.apply_weights( nnc )
 
     tr.minimal_error = 1e12
     tr.opencl_time = 0.0
     tr.total_time = 0.0
 
-    for it in range( 1 ):
-        m.start_training( nnc, training_data, tr, 1 )
-        print "Error: ", tr.minimal_error
-        print "Iterations: ", tr.iterations
-        print "OpenCL time: ", tr.opencl_time
-        print "Total time: ", tr.total_time
+    for i, t in enumerate( training_data ):
+        nnc.input_layer.set_inputs( t[0] )
+        nnc.input_layer.process()
+        out = nnc.output_layer.get_outputs()
+        err = out - t[1]
+        #print dates[i], numpy.sqrt( err * err ).sum(), list( t[1] ), list( out )
+        print out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8], out[9]
 
-        with open( ''.join( ( 'nn_data_', str( tr.iterations ), '_', str( tr.minimal_error ), '.pkl' ) ), 'wb' ) as f:
-            cPickle.dump( ( tr, m ), f, -1 )
-
-        for ti, t in enumerate( training_data ):
-            nn_h.set_inputs( t[0] )
-            nn_h.process()
-            out = nn_o.get_outputs()
-            err = out - t[ 1 ];
-            print out, numpy.sqrt( ( err * err ).sum() )
-            if ti > 5:
-                break;
+#    for it in range( 1 ):
+#        m.start_training( nnc, training_data, tr, 1 )
+#        print "Error: ", tr.minimal_error
+#        print "Iterations: ", tr.iterations
+#        print "OpenCL time: ", tr.opencl_time
+#        print "Total time: ", tr.total_time
+#
+#        with open( ''.join( ( 'nn_data_', str( tr.iterations ), '_', str( tr.minimal_error ), '.pkl' ) ), 'wb' ) as f:
+#            cPickle.dump( ( tr, m ), f, -1 )
+#
+#        for ti, t in enumerate( training_data ):
+#            nn_h.set_inputs( t[0] )
+#            nn_h.process()
+#            out = nn_o.get_outputs()
+#            err = out - t[ 1 ];
+#            print out, numpy.sqrt( ( err * err ).sum() )
+#            if ti > 5:
+#                break;
 
 if __name__ == '__main__':
     cProfile.run( 'test( )', 'test_prof' )

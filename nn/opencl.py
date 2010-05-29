@@ -149,26 +149,44 @@ class OpenCL( object ):
             }
             
             __kernel void setup_training_data(
+                int total_count,
                 __global const float * real_outputs,
                 int real_outputs_ofs,
                 int real_outputs_count,
                 __global const float * target_outputs,
+                __local float * partial_sum,
                 __global float * errors,
                 __global float * total_errors
                 )
             {
-                int gid = get_global_id( 0 );
-                
-                if( gid < real_outputs_ofs || gid >= real_outputs_ofs + real_outputs_count )
+                int lid = get_local_id( 0 );
+            
+                float sum = 0.0f;
+                for (uint x = lid; x < total_count; x += get_local_size(0))
                 {
-                    errors[ gid ] = 0.0f;
-                    return;
+                    if( x < real_outputs_ofs || x > real_outputs_ofs + real_outputs_count )
+                    {
+                        errors[ x ] = 0.0f;
+                        continue;
+                    }
+                    
+                    float err = real_outputs[ x ] - target_outputs[ x - real_outputs_ofs ];
+                    errors[ x ] = err * beta * ( 1.0f - real_outputs[ x ] * real_outputs[ x ] );
+
+                    sum += err * err;
+                }
+
+                partial_sum[lid] = sum;
+
+                for (uint stride = get_local_size(0)/2; stride > 0; stride /= 2)
+                {
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                    if (lid < stride)
+                        partial_sum[lid] += partial_sum[lid + stride];
                 }
                 
-                float err = real_outputs[ gid ] - target_outputs[ gid - real_outputs_ofs ];
-                total_errors[ gid - real_outputs_ofs ] += err * err;
-                
-                errors[ gid ] = err * beta * ( 1.0f - real_outputs[ gid ] * real_outputs[ gid ] );
+                if( get_global_id( 0 ) == 0 )
+                    total_errors[ 0 ] += native_sqrt( partial_sum[ 0 ] );
             }
 
             __kernel void adjust_weights(
@@ -318,11 +336,12 @@ class OpenCL( object ):
 
         self.event_list = []
 
-    def profile_kernel( self, queue, kernel, *kargs, **kwargs ):
         if self.profiling_enabled:
-            self.event_list.append( pyopencl.enqueue_nd_range_kernel( queue, kernel.get_kernel(), *kargs, **kwargs ) )
+            def f( queue, kernel, *kargs, **kwargs ):
+                self.event_list.append( pyopencl.enqueue_nd_range_kernel( queue, kernel.get_kernel(), *kargs, **kwargs ) )
+            OpenCL.profile_kernel = staticmethod( f )
         else:
-            pyopencl.enqueue_nd_range_kernel( queue, kernel, *kargs, **kwargs )
+            OpenCL.profile_kernel = staticmethod( pyopencl.enqueue_nd_range_kernel )
 
     def gather_opencl_time( self ):
         """
