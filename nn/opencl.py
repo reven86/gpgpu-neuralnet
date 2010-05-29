@@ -164,7 +164,7 @@ class OpenCL( object ):
                 float sum = 0.0f;
                 for (uint x = lid; x < total_count; x += get_local_size(0))
                 {
-                    if( x < real_outputs_ofs || x > real_outputs_ofs + real_outputs_count )
+                    if( x < real_outputs_ofs || x >= real_outputs_ofs + real_outputs_count )
                     {
                         errors[ x ] = 0.0f;
                         continue;

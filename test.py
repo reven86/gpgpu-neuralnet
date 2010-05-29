@@ -12,7 +12,7 @@ import cPickle
 import csv
 
 def test():
-    ocl = OpenCL( pyopencl.create_some_context(), enable_profiling = False )
+    ocl = OpenCL( pyopencl.create_some_context(), enable_profiling = True )
     i = InputLayer( 2, ocl )
     h1 = Layer( 1000, ocl )
     h2 = Layer( 10, ocl )

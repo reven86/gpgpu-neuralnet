@@ -81,7 +81,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.011453341692686081
+0.015365475788712502
 """
 
 import numpy
@@ -233,13 +233,38 @@ class TrainingMethod( object ):
 
         self.prepare_training( context )
 
-        outputs_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_ONLY, int( context.output_layer.neuron_count * 4 ) )
-        total_error_buf = pyopencl.Buffer( context.opencl.context, pyopencl.mem_flags.READ_WRITE, 4 )
+        total_error_buf = pyopencl.Buffer( 
+            context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.zeros( [1], numpy.float32 ) )
 
-        zeros = numpy.zeros( [context.weights_buf_size], numpy.float32 )
+        zeros_buf = pyopencl.Buffer( 
+            context.opencl.context,
+            pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.zeros( [context.weights_buf_size], numpy.float32 )
+            )
         total_error = numpy.array( [1e12], numpy.float32 )
 
         read_ready_event = None
+
+        training_data_buf = []
+        for inputs, outputs in training_data:
+            i_buf = pyopencl.Buffer( 
+                context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = inputs
+                )
+            o_buf = pyopencl.Buffer( 
+                context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = outputs
+                )
+            training_data_buf.append( ( i_buf, o_buf ) )
+
+        context.opencl.kernel_setup_training_data.set_arg( 0, context.neurons_buf_size )
+        context.opencl.kernel_setup_training_data.set_arg( 1, context.outputs_buf )
+        context.opencl.kernel_setup_training_data.set_arg( 2, context.output_layer.neurons_offset )
+        context.opencl.kernel_setup_training_data.set_arg( 3, context.output_layer.neuron_count )
+        context.opencl.kernel_setup_training_data.set_arg( 5, pyopencl.LocalMemory( 32 * 4 ) )
+        context.opencl.kernel_setup_training_data.set_arg( 6, context.errors_backpropagation_buf )
+        context.opencl.kernel_setup_training_data.set_arg( 7, total_error_buf )
 
         i = 0
         while training_results.minimal_error > target_error:
@@ -247,23 +272,18 @@ class TrainingMethod( object ):
                 break
             i += 1
 
-            pyopencl.enqueue_write_buffer( context.opencl.queue, total_error_buf, numpy.zeros( [ 1 ], numpy.float32 ) )
-            for inputs, outputs in training_data:
-                context.input_layer.set_inputs( inputs, is_blocking = False )
+            pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, total_error_buf, byte_count = 4 )
+            for inputs, outputs in training_data_buf:
+                pyopencl.enqueue_copy_buffer( 
+                    context.opencl.queue, inputs, context.inputs_buf,
+                    dst_offset = int( context.input_layer.inputs_offset * 4 )
+                    )
                 context.input_layer.process()
 
-                pyopencl.enqueue_write_buffer( context.opencl.queue, outputs_buf, outputs, is_blocking = False )
-                context.opencl.kernel_setup_training_data( 
-                    context.opencl.queue, ( 512, ),
-                    context.neurons_buf_size,
-                    context.outputs_buf,
-                    context.output_layer.neurons_offset,
-                    context.output_layer.neuron_count,
-                    outputs_buf,
-                    pyopencl.LocalMemory( 512 * 4 ),
-                    context.errors_backpropagation_buf,
-                    total_error_buf,
-                    local_size = ( 512, )
+                context.opencl.kernel_setup_training_data.set_arg( 4, outputs )
+                context.opencl.profile_kernel( context.opencl.queue, context.opencl.kernel_setup_training_data,
+                    ( 32, ), ( 32, ),
+                    None, None
                     )
 
 #                print context.output_layer.get_outputs()
@@ -272,14 +292,14 @@ class TrainingMethod( object ):
 
                 if not self.offline:
                     self.adjust_weights( context )
-                    pyopencl.enqueue_write_buffer( context.opencl.queue, context.gradient_buf, zeros )
+                    pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context.gradient_buf )
 
             if self.offline:
                 save_n = self.n
                 self.n /= numpy.float32( len( training_data ) )
                 self.adjust_weights( context )
                 self.n = save_n
-                pyopencl.enqueue_write_buffer( context.opencl.queue, context.gradient_buf, zeros )
+                pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context.gradient_buf )
 
 #            print read_ready_event and read_ready_event.command_execution_status
             if not read_ready_event or read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
