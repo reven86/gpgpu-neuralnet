@@ -88,6 +88,7 @@ class ExecutionContext( object ):
         self.opencl = input_layer.opencl
         self.input_layer = input_layer
         self.output_layer = output_layer
+        self.training_allowed = allow_training
         self.total_neurons = numpy.int32( 0 )
         self.total_weights = numpy.int32( 0 )
         self.total_inputs = numpy.int32( 0 )      # total inputs to neurons, without polarization link
@@ -145,11 +146,6 @@ class ExecutionContext( object ):
             hostbuf = numpy.zeros( [self.weights_buf_size], numpy.float32 )
             )
 
-        self.opencl.kernel_process_layer.set_arg( 0, self.inputs_buf )
-        self.opencl.kernel_process_layer.set_arg( 1, self.weights_buf )
-        self.opencl.kernel_process_layer.set_arg( 7, pyopencl.LocalMemory( 256 ) )
-        self.opencl.kernel_process_layer.set_arg( 8, self.outputs_buf )
-
         if allow_training:
             self.gradient_buf = pyopencl.Buffer( 
                 self.opencl.context,
@@ -161,15 +157,6 @@ class ExecutionContext( object ):
                 pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
                 hostbuf = numpy.zeros( [self.neurons_buf_size], numpy.float32 )
                 )
-
-            self.opencl.kernel_calc_layer_gradient.set_arg( 0, self.inputs_buf )
-            self.opencl.kernel_calc_layer_gradient.set_arg( 1, self.errors_backpropagation_buf )
-            self.opencl.kernel_calc_layer_gradient.set_arg( 6, self.gradient_buf )
-
-            self.opencl.kernel_propagate_errors.set_arg( 0, self.errors_backpropagation_buf )
-            self.opencl.kernel_propagate_errors.set_arg( 1, self.weights_buf )
-            self.opencl.kernel_propagate_errors.set_arg( 8, pyopencl.LocalMemory( 256 ) )
-            self.opencl.kernel_propagate_errors.set_arg( 9, self.outputs_buf )
 
 class Layer( object ):
     """
@@ -391,6 +378,21 @@ class InputLayer( Layer ):
         """
         Process for InputLayer does nothing. Simple invokes process for next layers.
         """
+        self.opencl.kernel_process_layer.set_arg( 0, self.context.inputs_buf )
+        self.opencl.kernel_process_layer.set_arg( 1, self.context.weights_buf )
+        self.opencl.kernel_process_layer.set_arg( 7, pyopencl.LocalMemory( 256 ) )
+        self.opencl.kernel_process_layer.set_arg( 8, self.context.outputs_buf )
+
+        if self.context.training_allowed:
+            self.opencl.kernel_calc_layer_gradient.set_arg( 0, self.context.inputs_buf )
+            self.opencl.kernel_calc_layer_gradient.set_arg( 1, self.context.errors_backpropagation_buf )
+            self.opencl.kernel_calc_layer_gradient.set_arg( 6, self.context.gradient_buf )
+
+            self.opencl.kernel_propagate_errors.set_arg( 0, self.context.errors_backpropagation_buf )
+            self.opencl.kernel_propagate_errors.set_arg( 1, self.context.weights_buf )
+            self.opencl.kernel_propagate_errors.set_arg( 8, pyopencl.LocalMemory( 256 ) )
+            self.opencl.kernel_propagate_errors.set_arg( 9, self.context.outputs_buf )
+
         super( InputLayer, self ).process()
 
         self.reset_processed()

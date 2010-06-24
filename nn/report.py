@@ -11,12 +11,20 @@ class Report( object ):
     Report class. Gathers training information and creates different reports.
     """
 
-    def __init__( self ):
+    def __init__( self, filename ):
         """
-        Empty constructor.
+        Report constructor.
+        
+        @param filename
+            File name, where temporary stats will be stored.
         """
 
         self.entries = []
+        self.filename = filename
+
+        # erase file
+        with open( filename, 'wb' ) as f:
+            pass
 
     def process_iteration( self, method, training_results, err, nnc ):
         """
@@ -30,3 +38,7 @@ class Report( object ):
             'total_neurons' : nnc.total_neurons,
             } )
 
+    def flush_stats( self ):
+        """
+        Flush data to disk to free some memory.
+        """

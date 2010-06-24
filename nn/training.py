@@ -233,16 +233,16 @@ class TrainingMethod( object ):
 
         self.prepare_training( context )
 
+        total_error = numpy.array( [1e12], numpy.float32 )
         total_error_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [1], numpy.float32 ) )
+            hostbuf = total_error )
 
         zeros_buf = pyopencl.Buffer( 
             context.opencl.context,
             pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
             hostbuf = numpy.zeros( [context.weights_buf_size], numpy.float32 )
             )
-        total_error = numpy.array( [1e12], numpy.float32 )
 
         read_ready_event = None
 
@@ -311,6 +311,7 @@ class TrainingMethod( object ):
                     total_error, is_blocking = False
                     )
                 error_sum = total_error[0] / len( training_data )
+                #print error_sum, ' ', i, ' ', self.n
 
                 self.adjust_training_parameters( error_sum )
 
