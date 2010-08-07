@@ -207,7 +207,8 @@ class TrainingMethod( object ):
             )
 
     def start_training( self, context, training_data, training_results,
-                        maximal_iterations = 10000, target_error = 0.01 ):
+                        maximal_iterations = 10000, target_error = 0.01,
+                        report = False ):
         """
         Starts training.
         
@@ -225,6 +226,9 @@ class TrainingMethod( object ):
             
         @param target_error
             Target absolute error.
+            
+        @param report
+            Report object (optimal)
             
         @return Tuple of performed iterations count, minimal relative error
         """
@@ -246,22 +250,16 @@ class TrainingMethod( object ):
 
         read_ready_event = None
 
-        training_data_buf = []
-        for inputs, outputs in training_data:
-            i_buf = pyopencl.Buffer( 
-                context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-                hostbuf = inputs
-                )
-            o_buf = pyopencl.Buffer( 
-                context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-                hostbuf = outputs
-                )
-            training_data_buf.append( ( i_buf, o_buf ) )
+        o_buf = pyopencl.Buffer( 
+            context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = numpy.zeros( [context.output_layer.neuron_count], numpy.float32 )
+            )
 
         context.opencl.kernel_setup_training_data.set_arg( 0, context.neurons_buf_size )
         context.opencl.kernel_setup_training_data.set_arg( 1, context.outputs_buf )
         context.opencl.kernel_setup_training_data.set_arg( 2, context.output_layer.neurons_offset )
         context.opencl.kernel_setup_training_data.set_arg( 3, context.output_layer.neuron_count )
+        context.opencl.kernel_setup_training_data.set_arg( 4, o_buf )
         context.opencl.kernel_setup_training_data.set_arg( 5, pyopencl.LocalMemory( 32 * 4 ) )
         context.opencl.kernel_setup_training_data.set_arg( 6, context.errors_backpropagation_buf )
         context.opencl.kernel_setup_training_data.set_arg( 7, total_error_buf )
@@ -273,15 +271,17 @@ class TrainingMethod( object ):
             i += 1
 
             pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, total_error_buf, byte_count = 4 )
-            for inputs, outputs in training_data_buf:
-                pyopencl.enqueue_copy_buffer( 
-                    context.opencl.queue, inputs, context.inputs_buf,
-                    dst_offset = int( context.input_layer.inputs_offset * 4 )
-                    )
+            for inputs, outputs in training_data:
+                context.input_layer.set_inputs( inputs, is_blocking = False )
                 context.input_layer.process()
 
-                context.opencl.kernel_setup_training_data.set_arg( 4, outputs )
-                context.opencl.profile_kernel( context.opencl.queue, context.opencl.kernel_setup_training_data,
+                pyopencl.enqueue_write_buffer( 
+                    context.opencl.queue, o_buf, outputs, is_blocking = False
+                    )
+
+                context.opencl.profile_kernel( 
+                    context.opencl.queue,
+                    context.opencl.kernel_setup_training_data,
                     ( 32, ), ( 32, ),
                     None, None
                     )
@@ -312,6 +312,9 @@ class TrainingMethod( object ):
                     )
                 error_sum = total_error[0] / len( training_data )
                 #print error_sum, ' ', i, ' ', self.n
+
+                if report:
+                    report.process_iteration( len( training_data ), self, training_results, error_sum, context )
 
                 self.adjust_training_parameters( error_sum )
 
