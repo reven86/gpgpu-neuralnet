@@ -68,7 +68,7 @@ import pyopencl
 
 class ExecutionContext( object ):
     """
-    Holds necessary data (buffers, kernels) for entire neural network that are using
+    Holds necessary data (buffers, kernels) for entire neural network that are used
     during inputs processing.
     """
 

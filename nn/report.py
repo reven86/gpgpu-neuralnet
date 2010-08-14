@@ -2,6 +2,9 @@
 Created on 01.06.2010
 
 @author: RevEn
+
+This module provide simple reporting tool that writes out
+training information to CSV file
 """
 
 import time
@@ -51,7 +54,7 @@ class Report( object ):
             'total_weights' : nnc.total_weights,
             } )
 
-        if len( self.entries ) > 100:
+        if self.iteration > 100000:
             self.flush_stats()
 
     def flush_stats( self ):
