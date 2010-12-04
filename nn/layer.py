@@ -288,7 +288,7 @@ class Layer( object ):
         self.opencl.kernel_process_layer.set_arg( 5, self.inputs_per_neuron )
         self.opencl.kernel_process_layer.set_arg( 6, self.neuron_count )
 
-        self.opencl.profile_kernel( queue, self.opencl.kernel_process_layer,
+        pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_process_layer,
             ( int( self.neuron_count * 64 ), ), ( 64, ),
             None, None
             )
@@ -320,7 +320,7 @@ class Layer( object ):
         self.opencl.kernel_calc_layer_gradient.set_arg( 4, self.inputs_per_neuron )
         self.opencl.kernel_calc_layer_gradient.set_arg( 5, self.weights_offset )
 
-        self.opencl.profile_kernel( queue, self.opencl.kernel_calc_layer_gradient,
+        pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_calc_layer_gradient,
             ( int( self.weights_count ), ), None,
             None, None
             )
@@ -338,7 +338,7 @@ class Layer( object ):
             self.opencl.kernel_propagate_errors.set_arg( 4, l[2] )
             self.opencl.kernel_propagate_errors.set_arg( 6, self.weights_offset + i_s )
 
-            self.opencl.profile_kernel( queue, self.opencl.kernel_propagate_errors,
+            pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_propagate_errors,
                 ( int( l[2] * 64 ), ), ( 64, ),
                 None, None
                 )

@@ -7,6 +7,8 @@ OpenCL programs and related data.
 """
 
 import pyopencl
+import numpy
+import csv
 
 class OpenCL( object ):
     """
@@ -36,8 +38,8 @@ class OpenCL( object ):
 
         self.context = opencl_context
         self.queue = pyopencl.CommandQueue( opencl_context, properties = queue_fl )
-        self.profiling_enabled = enable_profiling
-        self.program = pyopencl.Program( opencl_context, """
+        self._profiling_enabled = enable_profiling
+        self._program = pyopencl.Program( opencl_context, """
             __constant float beta = 0.66666f;
 
             __kernel void process_layer(
@@ -301,64 +303,78 @@ class OpenCL( object ):
             }
             """ ).build()
 
-        ocl = self
+        for attr in self._program.all_kernels():
+            setattr( self, 'kernel_' + attr.get_info( pyopencl.kernel_info.FUNCTION_NAME ), attr )
 
-        def profile_decorator( cmd ):
-            if self.profiling_enabled:
+        if self.profiling_enabled:
+            ocl = self
+
+            def profile_decorator( cmd ):
                 class cmd2( object ):
                     def __call__( self, *kargs, **kwargs ):
                         evt = cmd( *kargs, **kwargs )
-                        ocl.event_list.append( evt )
+                        ocl._event_list.append( ( cmd.__name__, evt ) )
                         return evt
-                    def set_arg( self, *kargs ):
-                        return cmd.set_arg( *kargs )
-                    def get_kernel( self ):
-                        return cmd
                 return cmd2()
-            return cmd
 
-        self.kernel_process_layer = profile_decorator( self.program.process_layer )
-        self.kernel_calc_layer_gradient = profile_decorator( self.program.calc_layer_gradient )
-        self.kernel_propagate_errors = profile_decorator( self.program.propagate_errors )
-        self.kernel_setup_training_data = profile_decorator( self.program.setup_training_data )
-        self.kernel_adjust_weights = profile_decorator( self.program.adjust_weights )
-        self.kernel_adjust_weights_quickprop = profile_decorator( self.program.adjust_weights_quickprop )
-        self.kernel_adjust_weights_rprop = profile_decorator( self.program.adjust_weights_rprop )
-        self.kernel_calc_conjugate_gradient_beta = profile_decorator( self.program.calc_conjugate_gradient_beta )
-        self.kernel_calc_conjugate_gradient_direction = profile_decorator( self.program.calc_conjugate_gradient_direction )
+            def profile_kernel_decorator( cmd ):
+                class cmd2( object ):
+                    def __call__( self, *kargs, **kwargs ):
+                        evt = cmd( *kargs, **kwargs )
+                        ocl._event_list.append( ( kargs[1].get_info( pyopencl.kernel_info.FUNCTION_NAME ), evt ) )
+                        return evt
+                return cmd2()
 
-#        for attr in self.program.all_kernels():
-#            setattr( self, 'kernel_' + attr.get_info( pyopencl.kernel_info.FUNCTION_NAME ), attr )
+            pyopencl.enqueue_copy_buffer = profile_decorator( pyopencl.enqueue_copy_buffer )
+            pyopencl.enqueue_read_buffer = profile_decorator( pyopencl.enqueue_read_buffer )
+            pyopencl.enqueue_write_buffer = profile_decorator( pyopencl.enqueue_write_buffer )
+            pyopencl.enqueue_nd_range_kernel = profile_kernel_decorator( pyopencl.enqueue_nd_range_kernel )
 
-        pyopencl.enqueue_copy_buffer = profile_decorator( pyopencl.enqueue_copy_buffer )
-        pyopencl.enqueue_read_buffer = profile_decorator( pyopencl.enqueue_read_buffer )
-        pyopencl.enqueue_write_buffer = profile_decorator( pyopencl.enqueue_write_buffer )
+            self._event_list = []
+            self._event_times_by_kernel = {}
 
-        self.event_list = []
+    @property
+    def profiling_enabled( self ):
+        return self._profiling_enabled
 
-        if self.profiling_enabled:
-            def f( queue, kernel, *kargs, **kwargs ):
-                self.event_list.append( pyopencl.enqueue_nd_range_kernel( queue, kernel.get_kernel(), *kargs, **kwargs ) )
-            OpenCL.profile_kernel = staticmethod( f )
-        else:
-            OpenCL.profile_kernel = staticmethod( pyopencl.enqueue_nd_range_kernel )
-
-    def gather_opencl_time( self ):
+    def gather_opencl_stats( self ):
         """
         Returns time in seconds spent by OpenCL since last call to gather_opencl_time.
         """
         if not self.profiling_enabled:
             return 0.0
 
-        res = 0.0;
+        # make sure all events are finished
         self.queue.finish()
-        for e in self.event_list:
-            # event.profile works too slow
-            res += e.get_profiling_info( pyopencl.profiling_info.END ) - e.get_profiling_info( pyopencl.profiling_info.START )
+        res = numpy.float32( 0.0 )
 
-        del self.event_list[:]
+        # for each event and kernel compute time for each event state
+        for k, e in self._event_list:
+            times = numpy.array( ( 
+                1,
+                # event.profile works too slow
+                1e-9 * ( e.get_profiling_info( pyopencl.profiling_info.SUBMIT ) - e.get_profiling_info( pyopencl.profiling_info.QUEUED ) ),
+                1e-9 * ( e.get_profiling_info( pyopencl.profiling_info.START ) - e.get_profiling_info( pyopencl.profiling_info.SUBMIT ) ),
+                1e-9 * ( e.get_profiling_info( pyopencl.profiling_info.END ) - e.get_profiling_info( pyopencl.profiling_info.START ) ),
+                ), numpy.float32 )
+            if k in self._event_times_by_kernel:
+                self._event_times_by_kernel[k] += times
+            else:
+                self._event_times_by_kernel[k] = times
+            res += times[2]
 
-        return 1e-9 * res
+        del self._event_list[:]
+        return res
+
+    def flush_stats( self, filename ):
+        """
+        Dumps gathered kernel statistics to file
+        """
+        if self.profiling_enabled:
+            with open( filename, 'wb' ) as f:
+                writer = csv.writer( f, delimiter = ";" )
+                for k, e in self._event_times_by_kernel.iteritems():
+                    writer.writerow( [k] + list( e ) )
 
 if __name__ == '__main__':
     import doctest

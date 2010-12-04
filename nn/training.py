@@ -279,7 +279,7 @@ class TrainingMethod( object ):
                     context.opencl.queue, o_buf, outputs, is_blocking = False
                     )
 
-                context.opencl.profile_kernel( 
+                pyopencl.enqueue_nd_range_kernel( 
                     context.opencl.queue,
                     context.opencl.kernel_setup_training_data,
                     ( 32, ), ( 32, ),
@@ -325,7 +325,7 @@ class TrainingMethod( object ):
                 if error_sum < target_error:
                     break;
 
-                training_results.opencl_time += context.opencl.gather_opencl_time()
+                training_results.opencl_time += context.opencl.gather_opencl_stats()
 
         training_results.iterations += i
 
@@ -341,7 +341,7 @@ class TrainingMethod( object ):
             training_results.minimal_error = error_sum
             training_results.store_weights( context )
 
-        training_results.opencl_time += context.opencl.gather_opencl_time()
+        training_results.opencl_time += context.opencl.gather_opencl_stats()
         training_results.total_time += time.clock() - start_time
 
     def adjust_weights( self, context ):
