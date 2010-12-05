@@ -219,6 +219,10 @@ class Layer( object ):
         self._next_layers = []
         self._processed = False
         self._inputs_per_neuron = numpy.int32( 1 )     # polarization input is always exists
+        self._process_event = None
+        self._process_wait_for = []
+        self._calc_gradient_event = None
+        self._calc_gradient_wait_for = []
 
     @property
     def neuron_count( self ):
@@ -326,25 +330,28 @@ class Layer( object ):
 
         i_s = 0
         for l in self._prev_layers:
-            pyopencl.enqueue_copy_buffer( 
+            self._process_wait_for.append( pyopencl.enqueue_copy_buffer( 
                 queue, outbuf, inbuf,
                 byte_count = int( l[2] * 4 ),
                 src_offset = int( ( l[0]._neurons_offset + l[1] ) * 4 ),
-                dst_offset = int( ( self._inputs_offset + i_s ) * 4 )
-                )
+                dst_offset = int( ( self._inputs_offset + i_s ) * 4 ),
+                wait_for = ( l[0]._process_event, )
+                ) )
             i_s += l[2]
 
         #process layer
-        self.opencl.kernel_process_layer.set_arg( 2, self._inputs_offset )
-        self.opencl.kernel_process_layer.set_arg( 3, self._weights_offset )
-        self.opencl.kernel_process_layer.set_arg( 4, self._neurons_offset )
-        self.opencl.kernel_process_layer.set_arg( 5, self._inputs_per_neuron )
-        self.opencl.kernel_process_layer.set_arg( 6, self._neuron_count )
+        kernel = self.opencl.kernel_process_layer
+        kernel.set_arg( 2, self._inputs_offset )
+        kernel.set_arg( 3, self._weights_offset )
+        kernel.set_arg( 4, self._neurons_offset )
+        kernel.set_arg( 5, self._inputs_per_neuron )
+        kernel.set_arg( 6, self._neuron_count )
 
-        pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_process_layer,
+        self._process_event = pyopencl.enqueue_nd_range_kernel( queue, kernel,
             ( int( self._neuron_count * 64 ), ), ( 64, ),
-            None, None
+            wait_for = self._process_wait_for
             )
+        del self._process_wait_for[:]
 
         self._processed = True
 
@@ -374,10 +381,11 @@ class Layer( object ):
         kernel.set_arg( 8, pyopencl.LocalMemory( int( 
                     4 * ( self._inputs_per_neuron + 1 + self.opencl.max_local_size[ 0 ] // self._inputs_per_neuron ) ) ) )
 
-        pyopencl.enqueue_nd_range_kernel( queue, kernel,
+        self._calc_gradient_event = pyopencl.enqueue_nd_range_kernel( queue, kernel,
             ( int( self._weights_buf_size ), ), ( self.opencl.max_local_size[ 0 ], ),
-            None, None
+            wait_for = self._calc_gradient_wait_for
             )
+        del self._calc_gradient_wait_for[:]
 
         kernel = self.opencl.kernel_propagate_errors
         kernel.set_arg( 2, self._neurons_offset )
@@ -390,10 +398,10 @@ class Layer( object ):
             kernel.set_arg( 4, l[2] )
             kernel.set_arg( 6, self._weights_offset + i_s )
 
-            pyopencl.enqueue_nd_range_kernel( queue, kernel,
+            l[0]._calc_gradient_wait_for.append( pyopencl.enqueue_nd_range_kernel( queue, kernel,
                 ( int( l[2] * 64 ), ), ( 64, ),
-                None, None
-                )
+                wait_for = ( self._calc_gradient_event, )
+                ) )
 
             i_s += l[2]
 
@@ -414,7 +422,7 @@ class InputLayer( Layer ):
 
         self._inputs_per_neuron += neuron_count
 
-    def set_inputs( self, inputs, is_blocking = True ):
+    def set_inputs( self, inputs, is_blocking = True, wait_for = None ):
         """
         Setup inputs to input layer.
         
@@ -423,7 +431,8 @@ class InputLayer( Layer ):
         """
         return pyopencl.enqueue_write_buffer( 
             self.opencl.queue, self.context._inputs_buf, inputs,
-            device_offset = int( self._inputs_offset * 4 ), is_blocking = is_blocking
+            device_offset = int( self._inputs_offset * 4 ), is_blocking = is_blocking,
+            wait_for = wait_for
             )
 
     def process( self ):

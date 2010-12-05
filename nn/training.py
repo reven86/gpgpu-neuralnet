@@ -247,7 +247,7 @@ class TrainingMethod( object ):
             Execution context.
         """
 
-        self.weights_delta_buf = pyopencl.Buffer( 
+        self._weights_delta_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
             hostbuf = numpy.zeros( [ context._weights_buf_size ], numpy.float32 )
             )
@@ -311,51 +311,62 @@ class TrainingMethod( object ):
         context.opencl.kernel_setup_training_data.set_arg( 7, total_error_buf )
 
         i = 0
+        calc_error_evt = None
         while training_results.minimal_error > target_error:
             if i >= maximal_iterations:
                 break
             i += 1
 
-            pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, total_error_buf, byte_count = 4 )
+            reset_total_error_evt = pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, total_error_buf, byte_count = 4 )
             for inputs, outputs in training_data:
-                context.input_layer.set_inputs( inputs, is_blocking = False )
+                evt = context.input_layer.set_inputs( inputs, is_blocking = False )
+                context.input_layer._process_wait_for.append( evt )
                 context.input_layer.process()
 
-                pyopencl.enqueue_write_buffer( 
+                evt = pyopencl.enqueue_write_buffer( 
                     context.opencl.queue, o_buf, outputs, is_blocking = False
                     )
 
-                pyopencl.enqueue_nd_range_kernel( 
+                calc_error_evt = pyopencl.enqueue_nd_range_kernel( 
                     context.opencl.queue,
                     context.opencl.kernel_setup_training_data,
                     ( 32, ), ( 32, ),
-                    None, None
+                    wait_for = ( evt, context.output_layer._process_event, reset_total_error_evt )
                     )
 
 #                print context.output_layer.get_outputs()
 
+                context.output_layer._calc_gradient_wait_for.append( calc_error_evt )
                 context.input_layer.calc_weights_gradient()
 
                 if not self.offline:
                     self.adjust_weights( context )
-                    pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context._gradient_buf )
+                    evt = pyopencl.enqueue_copy_buffer( 
+                        context.opencl.queue, zeros_buf, context._gradient_buf,
+                        wait_for = ( context.input_layer._calc_gradient_event, )
+                        )
+                    context.output_layer._calc_gradient_wait_for.append( evt )
 
             if self.offline:
                 save_n = self.n
                 self.n /= numpy.float32( len( training_data ) )
                 self.adjust_weights( context )
                 self.n = save_n
-                pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context._gradient_buf )
+                evt = pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context._gradient_buf )
+                context.output_layer._calc_gradient_wait_for.append( evt )
 
 #            print read_ready_event and read_ready_event.command_execution_status
-            if not read_ready_event or read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
+            if not read_ready_event:
                 # we use nonblocking read to avoid waiting for GPU
                 # this could lead to a delay in obtaining current error
                 # error of current iteration can be returned in several iteration ahead
                 read_ready_event = pyopencl.enqueue_read_buffer( 
                     context.opencl.queue, total_error_buf,
-                    total_error, is_blocking = False
+                    total_error, is_blocking = False,
+                    wait_for = ( calc_error_evt, )
                     )
+
+            if read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
                 error_sum = total_error[0] / len( training_data )
                 #print error_sum, ' ', i, ' ', self.n
 
@@ -366,7 +377,7 @@ class TrainingMethod( object ):
 
                 if error_sum < training_results.minimal_error:
                     training_results.minimal_error = error_sum
-                    training_results.store_weights( context )
+                    training_results.store_weights( context )   # note: this call is blocking!
 
                 if error_sum < target_error:
                     break;
@@ -377,7 +388,8 @@ class TrainingMethod( object ):
 
         pyopencl.enqueue_read_buffer( 
             context.opencl.queue, total_error_buf,
-            total_error, is_blocking = True
+            total_error, is_blocking = True,
+            wait_for = ( calc_error_evt, )
             )
         error_sum = total_error[0] / len( training_data )
 
@@ -400,8 +412,9 @@ class TrainingMethod( object ):
             context.opencl.queue, ( int( context._weights_buf_size ), ),
             dir,
             self.n, self.alpha,
-            self.weights_delta_buf,
-            context._weights_buf
+            self._weights_delta_buf,
+            context._weights_buf,
+            wait_for = ( context.input_layer._calc_gradient_event, )
             )
 
 
@@ -557,7 +570,7 @@ class Quickprop( TrainingMethod ):
             context._gradient_buf,
             self.prev_direction_buf,
             self.n, self.alpha,
-            self.weights_delta_buf,
+            self._weights_delta_buf,
             context._weights_buf
             )
 
@@ -635,3 +648,7 @@ class RPROP( TrainingMethod ):
 if __name__ == '__main__':
     import doctest #@UnresolvedImport
     doctest.testmod()
+
+    import unittest #@UnresolvedImport
+
+    unittest.main()

@@ -31,9 +31,9 @@ class OpenCL( object ):
         <pyopencl._cl.CommandQueue object at ...>
         """
 
-        queue_fl = 0
+        queue_fl = pyopencl.command_queue_properties.OUT_OF_ORDER_EXEC_MODE_ENABLE
         if enable_profiling:
-            queue_fl = pyopencl.command_queue_properties.PROFILING_ENABLE
+            queue_fl |= pyopencl.command_queue_properties.PROFILING_ENABLE
 
         self.context = opencl_context
         self.queue = pyopencl.CommandQueue( opencl_context, properties = queue_fl )
