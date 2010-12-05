@@ -46,7 +46,8 @@ Example of usage:
 
     Setting up inputs for entire neural network
 >>> i.set_inputs( numpy.array( ( 1, 2 ), numpy.float32 ) )
-
+<pyopencl._cl.Event object at ...>
+ 
     Setting up weights of links.
 >>> i.set_weights( numpy.array( ( 0, 1, 0, 0, 0, 1 ), numpy.float32 ) )
 >>> h.set_weights( numpy.array( ( 0, 1, 2, 3, 4, -5, 6, 7, 8 ), numpy.float32 ) )
@@ -64,7 +65,7 @@ array([ 0.25671202], dtype=float32)
 """
 
 import numpy
-import pyopencl
+import pyopencl #@UnresolvedImport
 
 class ExecutionContext( object ):
     """
@@ -85,42 +86,45 @@ class ExecutionContext( object ):
         @param allow_training
             if True then some buffers would have read-write access to allow store training data
         """
-        self.opencl = input_layer.opencl
-        self.input_layer = input_layer
-        self.output_layer = output_layer
-        self.training_allowed = allow_training
-        self.total_neurons = numpy.int32( 0 )
-        self.total_weights = numpy.int32( 0 )
-        self.total_inputs = numpy.int32( 0 )      # total inputs to neurons, without polarization link
+        self._opencl = input_layer.opencl
+        self._input_layer = input_layer
+        self._output_layer = output_layer
+        self._training_allowed = allow_training
+        self._total_neurons = numpy.int32( 0 )
+        self._total_weights = numpy.int32( 0 )
+        self._total_inputs = numpy.int32( 0 )      # total inputs to neurons, without polarization link
 
         # following variables define actual items count in buffers and may differ from
         # total_* variables due to alignment issues
-        self.neurons_buf_size = numpy.int32( 0 )
-        self.weights_buf_size = numpy.int32( 0 )
-        self.inputs_buf_size = numpy.int32( 0 )
+        self._neurons_buf_size = numpy.int32( 0 )
+        self._weights_buf_size = numpy.int32( 0 )
+        self._inputs_buf_size = numpy.int32( 0 )
 
         ll = [ input_layer ]
-
         while ll:
             l = ll.pop()
 
             #process layer
-            l.weights_count = l.neuron_count * l.inputs_per_neuron
-            l.weights_offset = self.weights_buf_size
-            l.neurons_offset = self.neurons_buf_size
-            l.inputs_offset = self.inputs_buf_size
+            l._weights_count = l.neuron_count * l.inputs_per_neuron
+            l._weights_offset = self._weights_buf_size
+            l._neurons_offset = self._neurons_buf_size
+            l._inputs_offset = self._inputs_buf_size
             l.context = self
-            l.processed = True
+            l._processed = True
 
-            self.total_weights += l.weights_count
-            self.total_neurons += l.neuron_count
-            self.total_inputs += l.inputs_per_neuron - 1
+            self._total_weights += l.weights_count
+            self._total_neurons += l.neuron_count
+            self._total_inputs += l.inputs_per_neuron - 1
 
-            self.neurons_buf_size += 16 * ( 1 + l.neuron_count // 16 )
-            self.weights_buf_size += 16 * ( 1 + l.weights_count // 16 )
-            self.inputs_buf_size += 16 * ( 1 + ( l.inputs_per_neuron - 1 ) // 16 )
+            l._neurons_buf_size = 32 * ( 1 + l.neuron_count // 32 )
+            l._weights_buf_size = self.opencl.max_local_size[ 0 ] * ( 1 + l.weights_count // self.opencl.max_local_size[ 0 ] )
+            l._inputs_buf_size = 16 * ( 1 + ( l.inputs_per_neuron - 1 ) // 16 )
 
-            for k in l.next_layers:
+            self._neurons_buf_size += l._neurons_buf_size
+            self._weights_buf_size += l._weights_buf_size
+            self._inputs_buf_size += l._inputs_buf_size
+
+            for k in l._next_layers:
                 if k[0].processed == False:
                     ll.append( k[0] )
 
@@ -131,32 +135,62 @@ class ExecutionContext( object ):
         else:
             fl = pyopencl.mem_flags.READ_ONLY
 
-        self.inputs_buf = pyopencl.Buffer( 
+        self._inputs_buf = pyopencl.Buffer( 
             self.opencl.context,
             pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [self.inputs_buf_size], numpy.float32 )
+            hostbuf = numpy.zeros( [self._inputs_buf_size], numpy.float32 )
             )
-        self.outputs_buf = pyopencl.Buffer( 
+        self._outputs_buf = pyopencl.Buffer( 
             self.opencl.context,
             pyopencl.mem_flags.WRITE_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [self.neurons_buf_size], numpy.float32 )
+            hostbuf = numpy.zeros( [self._neurons_buf_size], numpy.float32 )
             )
-        self.weights_buf = pyopencl.Buffer( 
+        self._weights_buf = pyopencl.Buffer( 
             self.opencl.context, fl | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [self.weights_buf_size], numpy.float32 )
+            hostbuf = numpy.zeros( [self._weights_buf_size], numpy.float32 )
             )
 
         if allow_training:
-            self.gradient_buf = pyopencl.Buffer( 
+            self._gradient_buf = pyopencl.Buffer( 
                 self.opencl.context,
                 pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-                hostbuf = numpy.zeros( [self.weights_buf_size], numpy.float32 )
+                hostbuf = numpy.zeros( [self._weights_buf_size], numpy.float32 )
                 )
-            self.errors_backpropagation_buf = pyopencl.Buffer( 
+            self._errors_backpropagation_buf = pyopencl.Buffer( 
                 self.opencl.context,
                 pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-                hostbuf = numpy.zeros( [self.neurons_buf_size], numpy.float32 )
+                hostbuf = numpy.zeros( [self._neurons_buf_size], numpy.float32 )
                 )
+
+    @property
+    def opencl( self ):
+        return self._opencl
+
+    @property
+    def input_layer( self ):
+        return self._input_layer
+
+    @property
+    def output_layer( self ):
+        return self._output_layer
+
+    @property
+    def training_allowed( self ):
+        return self._training_allowed
+
+    @property
+    def total_neurons( self ):
+        return self._total_neurons
+
+    @property
+    def total_inputs( self ):
+        return self._total_inputs
+
+    @property
+    def total_weights( self ):
+        return self._total_weights
+
+
 
 class Layer( object ):
     """
@@ -176,12 +210,28 @@ class Layer( object ):
         @see OpenCL
         """
 
-        self.neuron_count = numpy.int32( neuron_count )
+        self._neuron_count = numpy.int32( neuron_count )
         self.opencl = opencl
-        self.prev_layers = []
-        self.next_layers = []
-        self.processed = False
-        self.inputs_per_neuron = numpy.int32( 1 )     # polarization input is always exists
+        self._prev_layers = []
+        self._next_layers = []
+        self._processed = False
+        self._inputs_per_neuron = numpy.int32( 1 )     # polarization input is always exists
+
+    @property
+    def neuron_count( self ):
+        return self._neuron_count
+
+    @property
+    def processed( self ):
+        return self._processed
+
+    @property
+    def inputs_per_neuron( self ):
+        return self._inputs_per_neuron
+
+    @property
+    def weights_count( self ):
+        return self._weights_count
 
     def link_next( self, next_layer, this_start_neuron = 0, this_neurons_count = -1 ):
         """
@@ -198,9 +248,9 @@ class Layer( object ):
         if nc < 0:
             nc = self.neuron_count
 
-        self.next_layers.append( ( next_layer, numpy.int32( this_start_neuron ), nc ) )
-        next_layer.prev_layers.append( ( self, numpy.int32( this_start_neuron ), nc ) )
-        next_layer.inputs_per_neuron += nc
+        self._next_layers.append( ( next_layer, numpy.int32( this_start_neuron ), nc ) )
+        next_layer._prev_layers.append( ( self, numpy.int32( this_start_neuron ), nc ) )
+        next_layer._inputs_per_neuron += nc
 
     def set_weights( self, weights ):
         """
@@ -210,18 +260,18 @@ class Layer( object ):
             NumPy.NDArray of float32 values, size equals to inputs_per_neuron * neuron_count
         """
         pyopencl.enqueue_write_buffer( 
-            self.opencl.queue, self.context.weights_buf, weights,
-            device_offset = int( self.weights_offset * 4 ), is_blocking = True
+            self.opencl.queue, self.context._weights_buf, weights,
+            device_offset = int( self._weights_offset * 4 ), is_blocking = True
             )
 
     def get_weights( self ):
         """
         Returns weights.
         """
-        weights = numpy.ndarray( [ self.weights_count ], numpy.float32 )
+        weights = numpy.ndarray( [ self._weights_count ], numpy.float32 )
         pyopencl.enqueue_read_buffer( 
-            self.opencl.queue, self.context.weights_buf, weights,
-            device_offset = int( self.weights_offset * 4 ), is_blocking = True
+            self.opencl.queue, self.context._weights_buf, weights,
+            device_offset = int( self._weights_offset * 4 ), is_blocking = True
             )
         return weights
 
@@ -231,8 +281,8 @@ class Layer( object ):
         """
         inputs = numpy.ndarray( [ self.inputs_per_neuron - 1 ], numpy.float32 )
         pyopencl.enqueue_read_buffer( 
-            self.opencl.queue, self.context.inputs_buf, inputs,
-            device_offset = int( self.inputs_offset * 4 ), is_blocking = True
+            self.opencl.queue, self.context._inputs_buf, inputs,
+            device_offset = int( self._inputs_offset * 4 ), is_blocking = True
             )
         return inputs
 
@@ -242,8 +292,8 @@ class Layer( object ):
         """
         outputs = numpy.ndarray( [ self.neuron_count ], numpy.float32 )
         pyopencl.enqueue_read_buffer( 
-            self.opencl.queue, self.context.outputs_buf, outputs,
-            device_offset = int( self.neurons_offset * 4 ), is_blocking = True
+            self.opencl.queue, self.context._outputs_buf, outputs,
+            device_offset = int( self._neurons_offset * 4 ), is_blocking = True
             )
         return outputs
 
@@ -251,8 +301,8 @@ class Layer( object ):
         """
         Recursively reset processed flag on all linked layers.
         """
-        self.processed = False
-        for l in self.next_layers:
+        self._processed = False
+        for l in self._next_layers:
             l[0].reset_processed()
 
     def process( self ):
@@ -263,39 +313,40 @@ class Layer( object ):
         """
 
         # ensure that all previous layers are processed
-        for l in self.prev_layers:
+        for l in self._prev_layers:
             if not l[0].processed:
                 return
 
-        outbuf = self.context.outputs_buf
-        inbuf = self.context.inputs_buf
+        outbuf = self.context._outputs_buf
+        inbuf = self.context._inputs_buf
         queue = self.opencl.queue
 
         i_s = 0
-        for l in self.prev_layers:
+        for l in self._prev_layers:
             pyopencl.enqueue_copy_buffer( 
                 queue, outbuf, inbuf,
                 byte_count = int( l[2] * 4 ),
-                src_offset = int( ( l[0].neurons_offset + l[1] ) * 4 ),
-                dst_offset = int( ( self.inputs_offset + i_s ) * 4 )
+                src_offset = int( ( l[0]._neurons_offset + l[1] ) * 4 ),
+                dst_offset = int( ( self._inputs_offset + i_s ) * 4 )
                 )
             i_s += l[2]
 
         #process layer
-        self.opencl.kernel_process_layer.set_arg( 2, self.inputs_offset )
-        self.opencl.kernel_process_layer.set_arg( 3, self.weights_offset )
-        self.opencl.kernel_process_layer.set_arg( 4, self.neurons_offset )
-        self.opencl.kernel_process_layer.set_arg( 5, self.inputs_per_neuron )
-        self.opencl.kernel_process_layer.set_arg( 6, self.neuron_count )
+        self.opencl.kernel_process_layer.set_arg( 2, self._inputs_offset )
+        self.opencl.kernel_process_layer.set_arg( 3, self._weights_offset )
+        self.opencl.kernel_process_layer.set_arg( 4, self._neurons_offset )
+        self.opencl.kernel_process_layer.set_arg( 5, self._inputs_per_neuron )
+        self.opencl.kernel_process_layer.set_arg( 6, self._neuron_count )
+        self.opencl.kernel_process_layer.set_arg( 8, pyopencl.LocalMemory( int( 4 * self._inputs_per_neuron ) ) )
 
         pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_process_layer,
-            ( int( self.neuron_count * 64 ), ), ( 64, ),
+            ( int( self._neuron_count * 64 ), ), ( 64, ),
             None, None
             )
 
-        self.processed = True
+        self._processed = True
 
-        for l in self.next_layers:
+        for l in self._next_layers:
             l[0].process()
 
     def calc_weights_gradient( self ):
@@ -306,37 +357,34 @@ class Layer( object ):
         inputs array which is valid only at processing time.
         """
 
-        for l in self.next_layers:
+        for l in self._next_layers:
             if not l[0].processed:
                 l[0].calc_weights_gradient()
 
-#        err = numpy.ndarray( [ self.context.neurons_buf_size ], numpy.float32 )
-#        grad = numpy.ndarray( [ self.context.weights_buf_size ], numpy.float32 )
-
         queue = self.opencl.queue
 
-        self.opencl.kernel_calc_layer_gradient.set_arg( 2, self.inputs_offset )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 3, self.neurons_offset )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 4, self.inputs_per_neuron )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 5, self.weights_offset )
+        self.opencl.kernel_calc_layer_gradient.set_arg( 2, self._inputs_offset )
+        self.opencl.kernel_calc_layer_gradient.set_arg( 3, self._neurons_offset )
+        self.opencl.kernel_calc_layer_gradient.set_arg( 4, self._inputs_per_neuron )
+        self.opencl.kernel_calc_layer_gradient.set_arg( 5, self._weights_offset )
+        self.opencl.kernel_calc_layer_gradient.set_arg( 7, self._weights_count )
+        self.opencl.kernel_calc_layer_gradient.set_arg( 8, pyopencl.LocalMemory( int( 
+                    4 * ( self._inputs_per_neuron + self.opencl.max_local_size[ 0 ] // self._inputs_per_neuron ) ) ) )
 
         pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_calc_layer_gradient,
-            ( int( self.weights_count ), ), None,
+            ( int( self._weights_buf_size ), ), ( self.opencl.max_local_size[ 0 ], ),
             None, None
             )
 
-#        pyopencl.enqueue_read_buffer( self.opencl.queue, self.context.errors_backpropagation_buf, err, is_blocking = True )
-#        pyopencl.enqueue_read_buffer( self.opencl.queue, self.context.gradient_buf, grad, is_blocking = True )
-
-        self.opencl.kernel_propagate_errors.set_arg( 2, self.neurons_offset )
-        self.opencl.kernel_propagate_errors.set_arg( 5, self.neuron_count )
-        self.opencl.kernel_propagate_errors.set_arg( 7, self.inputs_per_neuron )
+        self.opencl.kernel_propagate_errors.set_arg( 2, self._neurons_offset )
+        self.opencl.kernel_propagate_errors.set_arg( 5, self._neuron_count )
+        self.opencl.kernel_propagate_errors.set_arg( 7, self._inputs_per_neuron )
 
         i_s = numpy.int32( 1 )
-        for l in self.prev_layers:
-            self.opencl.kernel_propagate_errors.set_arg( 3, l[0].neurons_offset + l[1] )
+        for l in self._prev_layers:
+            self.opencl.kernel_propagate_errors.set_arg( 3, l[0]._neurons_offset + l[1] )
             self.opencl.kernel_propagate_errors.set_arg( 4, l[2] )
-            self.opencl.kernel_propagate_errors.set_arg( 6, self.weights_offset + i_s )
+            self.opencl.kernel_propagate_errors.set_arg( 6, self._weights_offset + i_s )
 
             pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_propagate_errors,
                 ( int( l[2] * 64 ), ), ( 64, ),
@@ -345,7 +393,7 @@ class Layer( object ):
 
             i_s += l[2]
 
-        self.processed = True
+        self._processed = True
 
 class InputLayer( Layer ):
     """
@@ -360,7 +408,7 @@ class InputLayer( Layer ):
         """
         super( InputLayer, self ).__init__( neuron_count, opencl )
 
-        self.inputs_per_neuron += neuron_count
+        self._inputs_per_neuron += neuron_count
 
     def set_inputs( self, inputs, is_blocking = True ):
         """
@@ -369,29 +417,29 @@ class InputLayer( Layer ):
         @param inputs
             NumPy.NDArray of float32 values, size equals to neuron count
         """
-        pyopencl.enqueue_write_buffer( 
-            self.opencl.queue, self.context.inputs_buf, inputs,
-            device_offset = int( self.inputs_offset * 4 ), is_blocking = is_blocking
+        return pyopencl.enqueue_write_buffer( 
+            self.opencl.queue, self.context._inputs_buf, inputs,
+            device_offset = int( self._inputs_offset * 4 ), is_blocking = is_blocking
             )
 
     def process( self ):
         """
         Process for InputLayer does nothing. Simple invokes process for next layers.
         """
-        self.opencl.kernel_process_layer.set_arg( 0, self.context.inputs_buf )
-        self.opencl.kernel_process_layer.set_arg( 1, self.context.weights_buf )
-        self.opencl.kernel_process_layer.set_arg( 7, pyopencl.LocalMemory( 256 ) )
-        self.opencl.kernel_process_layer.set_arg( 8, self.context.outputs_buf )
+        self.opencl.kernel_process_layer.set_arg( 0, self.context._inputs_buf )
+        self.opencl.kernel_process_layer.set_arg( 1, self.context._weights_buf )
+        self.opencl.kernel_process_layer.set_arg( 7, pyopencl.LocalMemory( 64 * 4 ) )
+        self.opencl.kernel_process_layer.set_arg( 9, self.context._outputs_buf )
 
         if self.context.training_allowed:
-            self.opencl.kernel_calc_layer_gradient.set_arg( 0, self.context.inputs_buf )
-            self.opencl.kernel_calc_layer_gradient.set_arg( 1, self.context.errors_backpropagation_buf )
-            self.opencl.kernel_calc_layer_gradient.set_arg( 6, self.context.gradient_buf )
+            self.opencl.kernel_calc_layer_gradient.set_arg( 0, self.context._inputs_buf )
+            self.opencl.kernel_calc_layer_gradient.set_arg( 1, self.context._errors_backpropagation_buf )
+            self.opencl.kernel_calc_layer_gradient.set_arg( 6, self.context._gradient_buf )
 
-            self.opencl.kernel_propagate_errors.set_arg( 0, self.context.errors_backpropagation_buf )
-            self.opencl.kernel_propagate_errors.set_arg( 1, self.context.weights_buf )
+            self.opencl.kernel_propagate_errors.set_arg( 0, self.context._errors_backpropagation_buf )
+            self.opencl.kernel_propagate_errors.set_arg( 1, self.context._weights_buf )
             self.opencl.kernel_propagate_errors.set_arg( 8, pyopencl.LocalMemory( 256 ) )
-            self.opencl.kernel_propagate_errors.set_arg( 9, self.context.outputs_buf )
+            self.opencl.kernel_propagate_errors.set_arg( 9, self.context._outputs_buf )
 
         super( InputLayer, self ).process()
 
@@ -420,5 +468,146 @@ class OutputLayer( Layer ):
 #        pyopencl.enqueue_write_buffer( self.opencl.queue, self.errors_backpropagation_buf, data_to_train, is_blocking = True )
 
 if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
+    import doctest #@UnresolvedImport
+    doctest.testmod( optionflags = doctest.ELLIPSIS )
+
+    import unittest #@UnresolvedImport
+
+    class LayerTest( unittest.TestCase ):
+        def setUp( self ):
+            from opencl import OpenCL
+            self.ocl = OpenCL( pyopencl.create_some_context() )
+
+            self.i = InputLayer( 2, self.ocl )
+            self.h = Layer( 3, self.ocl )
+            self.o = OutputLayer( 1, self.ocl )
+
+            self.i.link_next( self.h )
+            self.h.link_next( self.o, 0, 3 )
+
+            self.nnc = ExecutionContext( self.i, self.o, allow_training = True )
+
+            self.i.set_weights( numpy.array( [ 0.1 ] * self.i.weights_count, numpy.float32 ) )
+            self.h.set_weights( numpy.array( [ 0.2 ] * self.h.weights_count, numpy.float32 ) )
+            self.o.set_weights( numpy.array( [ 0.3 ] * self.o.weights_count, numpy.float32 ) )
+
+        def assertArrayEqual( self, ar1, ar2 ):
+            self.assertEqual( len( ar1 ), len( ar2 ) )
+            for x, y in zip( numpy.array( ar1, numpy.float32 ), numpy.array( ar2, numpy.float32 ) ):
+                self.assertAlmostEqual( x, y, places = 5 )
+
+        def test_create( self ):
+            self.assertEqual( self.i.neuron_count, 2 )
+            self.assertEqual( self.h.neuron_count, 3 )
+            self.assertEqual( self.o.neuron_count, 1 )
+
+            self.assertEqual( self.i.weights_count, 6 )
+            self.assertEqual( self.h.weights_count, 9 )
+            self.assertEqual( self.o.weights_count, 4 )
+
+            self.assertArrayEqual( self.i.get_weights(), [ 0.1 ] * self.i.weights_count )
+            self.assertArrayEqual( self.h.get_weights(), [ 0.2 ] * self.h.weights_count )
+            self.assertArrayEqual( self.o.get_weights(), [ 0.3 ] * self.o.weights_count )
+
+        def test_process( self ):
+            self.i.set_inputs( numpy.array( [0.0, 0.0], numpy.float32 ), is_blocking = True )
+            self.i.process()
+
+            self.assertArrayEqual( self.i.get_inputs(), [ 0.0, 0.0 ] )
+            self.assertArrayEqual( self.i.get_outputs(), [ 0.066567414, 0.066567414 ] )
+            self.assertArrayEqual( self.h.get_inputs(), [ 0.066567414, 0.066567414 ] )
+            self.assertArrayEqual( self.h.get_outputs(), [ 0.14994399, 0.14994399, 0.14994399 ] )
+            self.assertArrayEqual( self.o.get_inputs(), [ 0.14994399, 0.14994399, 0.14994399 ] )
+            self.assertArrayEqual( self.o.get_outputs(), [ 0.28210124 ] )
+
+            self.i.set_inputs( numpy.array( [0.0, 1.0], numpy.float32 ), is_blocking = True )
+            self.i.process()
+
+            self.assertArrayEqual( self.i.get_inputs(), [ 0.0, 1.0 ] )
+            self.assertArrayEqual( self.i.get_outputs(), [ 0.13254748, 0.13254748 ] )
+            self.assertArrayEqual( self.h.get_inputs(), [ 0.13254748, 0.13254748 ] )
+            self.assertArrayEqual( self.h.get_outputs(), [ 0.16709591, 0.16709591, 0.16709591 ] )
+            self.assertArrayEqual( self.o.get_inputs(), [ 0.16709591, 0.16709591, 0.16709591 ] )
+            self.assertArrayEqual( self.o.get_outputs(), [ 0.29154554 ] )
+
+        def test_gradient( self ):
+            self.i.set_inputs( numpy.array( [1.0, 0.0], numpy.float32 ), is_blocking = True )
+            self.i.process()
+
+            self.assertArrayEqual( self.o.get_outputs(), [ 0.29154554 ] )
+
+            o_buf = pyopencl.Buffer( 
+                self.nnc.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = numpy.ones( [self.nnc.output_layer.neuron_count], numpy.float32 )
+                )
+
+            total_error_buf = pyopencl.Buffer( 
+                self.nnc.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = numpy.array( [1e12], numpy.float32 ) )
+
+            self.nnc.opencl.kernel_setup_training_data.set_args( 
+                self.nnc._neurons_buf_size, self.nnc._outputs_buf, self.nnc.output_layer._neurons_offset,
+                self.nnc.output_layer.neuron_count, o_buf, pyopencl.LocalMemory( 32 * 4 ),
+                self.nnc._errors_backpropagation_buf, total_error_buf )
+
+            pyopencl.enqueue_nd_range_kernel( 
+                self.nnc.opencl.queue,
+                self.nnc.opencl.kernel_setup_training_data,
+                ( 32, ), ( 32, ),
+                None, None
+                ).wait()
+
+            self.i.calc_weights_gradient()
+
+            err = numpy.ndarray( [ self.nnc._neurons_buf_size ], numpy.float32 )
+            grad = numpy.ndarray( [ self.nnc._weights_buf_size ], numpy.float32 )
+
+            pyopencl.enqueue_read_buffer( self.ocl.queue, self.nnc._errors_backpropagation_buf, err, is_blocking = True )
+            pyopencl.enqueue_read_buffer( self.ocl.queue, self.nnc._gradient_buf, grad, is_blocking = True )
+
+            real_err = ( 0.29154554 - 1.0 ) * 0.6666666 * ( 1.0 - 0.29154554 * 0.29154554 )
+            self.assertAlmostEqual( err[self.o._neurons_offset], real_err, places = 5 )
+            self.assertArrayEqual( grad[self.o._weights_offset:self.o._weights_offset + self.o._weights_count], [ real_err ] + list( self.o.get_inputs() * real_err ) )
+            self.assertArrayEqual( grad[self.i._weights_offset:self.i._weights_offset + self.i._weights_count], [ -0.033015892, -0.033015892, 0.0 ] * 2 )
+            self.assertArrayEqual( grad[self.h._weights_offset:self.h._weights_offset + self.h._weights_count], [ -0.08401663, -0.01113619, -0.01113619 ] * 3 )
+
+    class ComplexNNTest( unittest.TestCase ):
+        def setUp( self ):
+            from opencl import OpenCL
+            self.ocl = OpenCL( pyopencl.create_some_context() )
+
+            self.i = InputLayer( 10, self.ocl )
+            self.h1 = Layer( 3, self.ocl )
+            self.h2 = Layer( 3, self.ocl )
+            self.h3 = Layer( 3, self.ocl )
+            self.o = OutputLayer( 4, self.ocl )
+
+            self.i.link_next( self.h1, 0, 3 )
+            self.i.link_next( self.h2, 0, 5 )
+            self.i.link_next( self.h3, 4, 6 )
+            self.i.link_next( self.o, 9, 1 )
+            self.h1.link_next( self.h3 )
+            self.h2.link_next( self.h3, 0, 2 )
+            self.h2.link_next( self.o )
+            self.h3.link_next( self.o )
+
+            self.nnc = ExecutionContext( self.i, self.o, allow_training = True )
+
+        def assertArrayEqual( self, ar1, ar2 ):
+            self.assertEqual( len( ar1 ), len( ar2 ) )
+            for x, y in zip( numpy.array( ar1, numpy.float32 ), numpy.array( ar2, numpy.float32 ) ):
+                self.assertAlmostEqual( x, y, places = 5 )
+
+        def test_process( self ):
+            weights = numpy.random.rand( self.nnc._weights_buf_size ).astype( numpy.float32 )
+            weights -= 0.5
+            weights *= 4.0 / numpy.sqrt( numpy.float32( self.nnc._weights_buf_size / self.nnc._neurons_buf_size ) )
+
+            pyopencl.enqueue_write_buffer( self.ocl.queue, self.nnc._weights_buf, weights, is_blocking = True )
+
+            self.i.set_inputs( numpy.array( [x * x for x in range( 0, 10 )], numpy.float32 ), is_blocking = True )
+            self.i.process()
+
+            self.assertArrayEqual( self.i.get_outputs()[:3], self.h1.get_inputs() )
+
+    unittest.main()

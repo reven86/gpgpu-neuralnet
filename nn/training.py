@@ -85,7 +85,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 """
 
 import numpy
-import pyopencl
+import pyopencl #@UnresolvedImport
 import time
 
 
@@ -118,14 +118,14 @@ class TrainingResults( object ):
         """
         Stores list of layers weights for entire neural network.
         """
-        self.optimal_weights = numpy.ndarray( [context.weights_buf_size], numpy.float32 )
-        pyopencl.enqueue_read_buffer( context.opencl.queue, context.weights_buf, self.optimal_weights, is_blocking = True )
+        self.optimal_weights = numpy.ndarray( [context._weights_buf_size], numpy.float32 )
+        pyopencl.enqueue_read_buffer( context.opencl.queue, context._weights_buf, self.optimal_weights, is_blocking = True )
 
     def apply_weights( self, context ):
         """
         Apply optimal weights to neural network.
         """
-        pyopencl.enqueue_write_buffer( context.opencl.queue, context.weights_buf, self.optimal_weights )
+        pyopencl.enqueue_write_buffer( context.opencl.queue, context._weights_buf, self.optimal_weights )
 
 
 
@@ -203,7 +203,7 @@ class TrainingMethod( object ):
 
         self.weights_delta_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context._weights_buf_size ], numpy.float32 )
             )
 
     def start_training( self, context, training_data, training_results,
@@ -245,7 +245,7 @@ class TrainingMethod( object ):
         zeros_buf = pyopencl.Buffer( 
             context.opencl.context,
             pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [context.weights_buf_size], numpy.float32 )
+            hostbuf = numpy.zeros( [context._weights_buf_size], numpy.float32 )
             )
 
         read_ready_event = None
@@ -255,13 +255,13 @@ class TrainingMethod( object ):
             hostbuf = numpy.zeros( [context.output_layer.neuron_count], numpy.float32 )
             )
 
-        context.opencl.kernel_setup_training_data.set_arg( 0, context.neurons_buf_size )
-        context.opencl.kernel_setup_training_data.set_arg( 1, context.outputs_buf )
-        context.opencl.kernel_setup_training_data.set_arg( 2, context.output_layer.neurons_offset )
+        context.opencl.kernel_setup_training_data.set_arg( 0, context._neurons_buf_size )
+        context.opencl.kernel_setup_training_data.set_arg( 1, context._outputs_buf )
+        context.opencl.kernel_setup_training_data.set_arg( 2, context.output_layer._neurons_offset )
         context.opencl.kernel_setup_training_data.set_arg( 3, context.output_layer.neuron_count )
         context.opencl.kernel_setup_training_data.set_arg( 4, o_buf )
         context.opencl.kernel_setup_training_data.set_arg( 5, pyopencl.LocalMemory( 32 * 4 ) )
-        context.opencl.kernel_setup_training_data.set_arg( 6, context.errors_backpropagation_buf )
+        context.opencl.kernel_setup_training_data.set_arg( 6, context._errors_backpropagation_buf )
         context.opencl.kernel_setup_training_data.set_arg( 7, total_error_buf )
 
         i = 0
@@ -292,14 +292,14 @@ class TrainingMethod( object ):
 
                 if not self.offline:
                     self.adjust_weights( context )
-                    pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context.gradient_buf )
+                    pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context._gradient_buf )
 
             if self.offline:
                 save_n = self.n
                 self.n /= numpy.float32( len( training_data ) )
                 self.adjust_weights( context )
                 self.n = save_n
-                pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context.gradient_buf )
+                pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context._gradient_buf )
 
 #            print read_ready_event and read_ready_event.command_execution_status
             if not read_ready_event or read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
@@ -351,11 +351,11 @@ class TrainingMethod( object ):
         dir = self.get_weights_direction_buf( context ) #this call should always return opposite direction
 
         context.opencl.kernel_adjust_weights( 
-            context.opencl.queue, ( int( context.weights_buf_size ), ),
+            context.opencl.queue, ( int( context._weights_buf_size ), ),
             dir,
             self.n, self.alpha,
             self.weights_delta_buf,
-            context.weights_buf
+            context._weights_buf
             )
 
 
@@ -376,7 +376,7 @@ class GradientDescent( TrainingMethod ):
         Returns direction is weights space by which weights should be modified.
         In gradient descent method this is simply gradients vector
         """
-        return context.gradient_buf
+        return context._gradient_buf
 
 
 
@@ -401,11 +401,11 @@ class ConjugateGradient( TrainingMethod ):
 
         self.direction_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context._weights_buf_size ], numpy.float32 )
             )
         self.prev_gradient_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ 0.01 ] * context.weights_buf_size, numpy.float32 )
+            hostbuf = numpy.array( [ 0.01 ] * context._weights_buf_size, numpy.float32 )
             )
 
         #1 float beta coefficient
@@ -426,9 +426,9 @@ class ConjugateGradient( TrainingMethod ):
         """
         context.opencl.kernel_calc_conjugate_gradient_beta( 
             context.opencl.queue, ( 64, ),
-            context.gradient_buf,
+            context._gradient_buf,
             self.prev_gradient_buf,
-            numpy.int32( context.weights_buf_size ),
+            numpy.int32( context._weights_buf_size ),
             pyopencl.LocalMemory( 256 ),
             pyopencl.LocalMemory( 256 ),
             self.beta_buf,
@@ -452,8 +452,8 @@ class ConjugateGradient( TrainingMethod ):
             self.iteration_count = 0
 
         context.opencl.kernel_calc_conjugate_gradient_direction( 
-            context.opencl.queue, ( int( context.weights_buf_size ), ),
-            context.gradient_buf,
+            context.opencl.queue, ( int( context._weights_buf_size ), ),
+            context._gradient_buf,
             self.beta_buf,
             self.direction_buf,
             self.prev_gradient_buf
@@ -494,7 +494,7 @@ class Quickprop( TrainingMethod ):
 
         self.prev_direction_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context._weights_buf_size ], numpy.float32 )
             )
 
     def __getstate__( self ):
@@ -507,15 +507,15 @@ class Quickprop( TrainingMethod ):
         Adjust weights of neural network by certain direction.
         """
         context.opencl.kernel_adjust_weights_quickprop( 
-            context.opencl.queue, ( int( context.weights_buf_size ), ),
-            context.gradient_buf,
+            context.opencl.queue, ( int( context._weights_buf_size ), ),
+            context._gradient_buf,
             self.prev_direction_buf,
             self.n, self.alpha,
             self.weights_delta_buf,
-            context.weights_buf
+            context._weights_buf
             )
 
-        pyopencl.enqueue_copy_buffer( context.opencl.queue, context.gradient_buf, self.prev_direction_buf )
+        pyopencl.enqueue_copy_buffer( context.opencl.queue, context._gradient_buf, self.prev_direction_buf )
 
     def adjust_training_parameters( self, error ):
         """
@@ -547,11 +547,11 @@ class RPROP( TrainingMethod ):
 
         self.n_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.array( [ self.n ] * context.weights_buf_size, numpy.float32 )
+            hostbuf = numpy.array( [ self.n ] * context._weights_buf_size, numpy.float32 )
             )
         self.prev_gradient_buf = pyopencl.Buffer( 
             context.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-            hostbuf = numpy.zeros( [ context.weights_buf_size ], numpy.float32 )
+            hostbuf = numpy.zeros( [ context._weights_buf_size ], numpy.float32 )
             )
 
     def __getstate__( self ):
@@ -565,18 +565,18 @@ class RPROP( TrainingMethod ):
         Adjust weights of neural network by certain direction.
         """
         context.opencl.kernel_adjust_weights_rprop( 
-            context.opencl.queue, ( int( context.weights_buf_size ), ),
-            context.gradient_buf,
+            context.opencl.queue, ( int( context._weights_buf_size ), ),
+            context._gradient_buf,
             self.prev_gradient_buf,
             self.n_buf,
-            context.weights_buf
+            context._weights_buf
             )
 
         #nn = numpy.ndarray( [context.weights_buf_size], numpy.float32 )
         #pyopencl.enqueue_read_buffer( context.opencl.queue, context.gradient_buf, nn, is_blocking = True )
         #pyopencl.enqueue_read_buffer( context.opencl.queue, self.n_buf, nn, is_blocking = True )
 
-        pyopencl.enqueue_copy_buffer( context.opencl.queue, context.gradient_buf, self.prev_gradient_buf )
+        pyopencl.enqueue_copy_buffer( context.opencl.queue, context._gradient_buf, self.prev_gradient_buf )
 
     def adjust_training_parameters( self, error ):
         """
@@ -587,5 +587,5 @@ class RPROP( TrainingMethod ):
 
 
 if __name__ == '__main__':
-    import doctest
+    import doctest #@UnresolvedImport
     doctest.testmod()
