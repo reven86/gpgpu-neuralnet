@@ -100,6 +100,9 @@ class ExecutionContext( object ):
         self._weights_buf_size = numpy.int32( 0 )
         self._inputs_buf_size = numpy.int32( 0 )
 
+        def align( value, threshold ):
+            return ( value + threshold - 1 ) & ~( threshold - 1 )
+
         ll = [ input_layer ]
         while ll:
             l = ll.pop()
@@ -116,9 +119,9 @@ class ExecutionContext( object ):
             self._total_neurons += l.neuron_count
             self._total_inputs += l.inputs_per_neuron - 1
 
-            l._neurons_buf_size = 32 * ( 1 + l.neuron_count // 32 )
-            l._weights_buf_size = self.opencl.max_local_size[ 0 ] * ( 1 + l.weights_count // self.opencl.max_local_size[ 0 ] )
-            l._inputs_buf_size = 16 * ( 1 + ( l.inputs_per_neuron - 1 ) // 16 )
+            l._neurons_buf_size = align( l.neuron_count, 32 )
+            l._weights_buf_size = align( l.weights_count, self.opencl.max_local_size[ 0 ] )
+            l._inputs_buf_size = align( l.inputs_per_neuron - 1, 16 )
 
             self._neurons_buf_size += l._neurons_buf_size
             self._weights_buf_size += l._weights_buf_size
@@ -337,7 +340,6 @@ class Layer( object ):
         self.opencl.kernel_process_layer.set_arg( 4, self._neurons_offset )
         self.opencl.kernel_process_layer.set_arg( 5, self._inputs_per_neuron )
         self.opencl.kernel_process_layer.set_arg( 6, self._neuron_count )
-        self.opencl.kernel_process_layer.set_arg( 8, pyopencl.LocalMemory( int( 4 * self._inputs_per_neuron ) ) )
 
         pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_process_layer,
             ( int( self._neuron_count * 64 ), ), ( 64, ),
@@ -362,31 +364,33 @@ class Layer( object ):
                 l[0].calc_weights_gradient()
 
         queue = self.opencl.queue
+        kernel = self.opencl.kernel_calc_layer_gradient
 
-        self.opencl.kernel_calc_layer_gradient.set_arg( 2, self._inputs_offset )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 3, self._neurons_offset )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 4, self._inputs_per_neuron )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 5, self._weights_offset )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 7, self._weights_count )
-        self.opencl.kernel_calc_layer_gradient.set_arg( 8, pyopencl.LocalMemory( int( 
-                    4 * ( self._inputs_per_neuron + self.opencl.max_local_size[ 0 ] // self._inputs_per_neuron ) ) ) )
+        kernel.set_arg( 2, self._inputs_offset )
+        kernel.set_arg( 3, self._neurons_offset )
+        kernel.set_arg( 4, self._inputs_per_neuron )
+        kernel.set_arg( 5, self._weights_offset )
+        kernel.set_arg( 7, self._weights_count )
+        kernel.set_arg( 8, pyopencl.LocalMemory( int( 
+                    4 * ( self._inputs_per_neuron + 1 + self.opencl.max_local_size[ 0 ] // self._inputs_per_neuron ) ) ) )
 
-        pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_calc_layer_gradient,
+        pyopencl.enqueue_nd_range_kernel( queue, kernel,
             ( int( self._weights_buf_size ), ), ( self.opencl.max_local_size[ 0 ], ),
             None, None
             )
 
-        self.opencl.kernel_propagate_errors.set_arg( 2, self._neurons_offset )
-        self.opencl.kernel_propagate_errors.set_arg( 5, self._neuron_count )
-        self.opencl.kernel_propagate_errors.set_arg( 7, self._inputs_per_neuron )
+        kernel = self.opencl.kernel_propagate_errors
+        kernel.set_arg( 2, self._neurons_offset )
+        kernel.set_arg( 5, self._neuron_count )
+        kernel.set_arg( 7, self._inputs_per_neuron )
 
         i_s = numpy.int32( 1 )
         for l in self._prev_layers:
-            self.opencl.kernel_propagate_errors.set_arg( 3, l[0]._neurons_offset + l[1] )
-            self.opencl.kernel_propagate_errors.set_arg( 4, l[2] )
-            self.opencl.kernel_propagate_errors.set_arg( 6, self._weights_offset + i_s )
+            kernel.set_arg( 3, l[0]._neurons_offset + l[1] )
+            kernel.set_arg( 4, l[2] )
+            kernel.set_arg( 6, self._weights_offset + i_s )
 
-            pyopencl.enqueue_nd_range_kernel( queue, self.opencl.kernel_propagate_errors,
+            pyopencl.enqueue_nd_range_kernel( queue, kernel,
                 ( int( l[2] * 64 ), ), ( 64, ),
                 None, None
                 )
@@ -429,7 +433,7 @@ class InputLayer( Layer ):
         self.opencl.kernel_process_layer.set_arg( 0, self.context._inputs_buf )
         self.opencl.kernel_process_layer.set_arg( 1, self.context._weights_buf )
         self.opencl.kernel_process_layer.set_arg( 7, pyopencl.LocalMemory( 64 * 4 ) )
-        self.opencl.kernel_process_layer.set_arg( 9, self.context._outputs_buf )
+        self.opencl.kernel_process_layer.set_arg( 8, self.context._outputs_buf )
 
         if self.context.training_allowed:
             self.opencl.kernel_calc_layer_gradient.set_arg( 0, self.context._inputs_buf )
@@ -457,15 +461,6 @@ class OutputLayer( Layer ):
     """
     Special layer for outputs.
     """
-
-#    def setup_training_data( self, data_to_train ):
-#        """
-#        Setup data to train neural network to.
-#        
-#        @param data_to_train
-#            Numpy array, size should exactly match neurons count of OutputLayer.
-#        """
-#        pyopencl.enqueue_write_buffer( self.opencl.queue, self.errors_backpropagation_buf, data_to_train, is_blocking = True )
 
 if __name__ == '__main__':
     import doctest #@UnresolvedImport

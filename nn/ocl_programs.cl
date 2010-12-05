@@ -9,25 +9,26 @@ __kernel void process_layer(
     int inputs_per_neuron,
     int neuron_count,
     __local float * partial_sum,
-    __local float * temp_inp,
     __global float * outputs )
 {
-    int lid = get_local_id(0);
-    if( lid == 0 )
-    	temp_inp[ 0 ] = 1.0f;
-    else
-	    for( int i = lid; i < inputs_per_neuron; i += get_local_size( 0 ) )
-			temp_inp[ i ] = inputs[ i - 1 + inputs_ofs ];
-
     for (uint y = get_group_id(0); y < neuron_count; y += get_num_groups(0))
     {
-	    barrier(CLK_LOCAL_MEM_FENCE);
-
         const __global float * row = weights + weights_ofs + y * inputs_per_neuron;
 
-        float sum = 0.0f;
-        for (uint x = lid; x < inputs_per_neuron; x += get_local_size(0))
-            sum += row[x] * temp_inp[ x ];
+        int lid = get_local_id(0);
+        int sum_start = lid;
+        
+        float sum;
+        if (lid == 0)
+        {
+            sum = row[0];
+            sum_start = get_local_size(0);
+        }
+        else
+            sum = 0.0f;
+
+        for (uint x = sum_start; x < inputs_per_neuron; x += get_local_size(0))
+            sum += row[x] * inputs[x - 1 + inputs_ofs];
 
         partial_sum[lid] = sum;
 
@@ -40,6 +41,8 @@ __kernel void process_layer(
 
         if (lid == 0)
             outputs[y + outputs_ofs] = tanh( beta * partial_sum[0] );
+
+        barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
 
@@ -71,6 +74,8 @@ __kernel void calc_layer_gradient(
     	temp_mem[ lid ] = input_index == 0 ? 1.0 : inp[ input_index - 1 ];
     if( lid_inp == 0 )
     	temp_mem[ inputs_per_neuron + lid_div_inp ] = err[ error_index ];
+    	
+    float g = grad[ i ];
     
     barrier(CLK_LOCAL_MEM_FENCE);
 
@@ -78,7 +83,7 @@ __kernel void calc_layer_gradient(
 		return;
 
     float e = temp_mem[ inputs_per_neuron + lid_div_inp ] * temp_mem[ lid_inp ];
-	grad[ i ] += e;
+	grad[ i ] = g + e;
 }
 
 __kernel void propagate_errors(

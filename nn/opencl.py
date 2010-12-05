@@ -38,7 +38,7 @@ class OpenCL( object ):
         self.context = opencl_context
         self.queue = pyopencl.CommandQueue( opencl_context, properties = queue_fl )
         self._profiling_enabled = enable_profiling
-        self._max_local_size = self.context.devices[0].max_work_item_sizes
+        self._max_local_size = map( int, self.context.devices[0].max_work_item_sizes )
 
         with open( os.path.join( os.path.dirname( __file__ ), 'ocl_programs.cl' ), 'rt' ) as f:
             self._program = pyopencl.Program( opencl_context, f.read() ).build()
@@ -79,7 +79,7 @@ class OpenCL( object ):
 
     @property
     def max_local_size( self ):
-        return ( 512, )#self._max_local_size
+        return self._max_local_size
 
     def gather_opencl_stats( self ):
         """

@@ -114,18 +114,64 @@ class TrainingResults( object ):
         self.total_time = 0.0
         self.opencl_time = 0.0
 
+    def _iterate_over_layers( self, context, func ):
+        """
+        Helper method to iterate over all layers in neural
+        network and apply some functor to layer
+        """
+        ll = [ context.input_layer ]
+        while ll:
+            l = ll.pop()
+            l._processed = True
+            func( l )
+            for k in l._next_layers:
+                if k[0].processed == False:
+                    ll.append( k[0] )
+
+        context.input_layer.reset_processed()
+
     def store_weights( self, context ):
         """
         Stores list of layers weights for entire neural network.
         """
-        self.optimal_weights = numpy.ndarray( [context._weights_buf_size], numpy.float32 )
-        pyopencl.enqueue_read_buffer( context.opencl.queue, context._weights_buf, self.optimal_weights, is_blocking = True )
+
+        # iterate over all layers and apply weights to them
+        self.optimal_weights = []
+        def _store_weights( l ):
+            self.optimal_weights.append( l.get_weights() )
+
+        self._iterate_over_layers( context, _store_weights )
 
     def apply_weights( self, context ):
         """
         Apply optimal weights to neural network.
         """
-        pyopencl.enqueue_write_buffer( context.opencl.queue, context._weights_buf, self.optimal_weights )
+        if not isinstance( self.optimal_weights, list ):
+            #old format, convert optimal_weights to list
+
+            class _gather_weights():
+                def __init__( self, w ):
+                    self.ofs = 0
+                    self.optimal_weights = w
+                    self.new_weights = []
+                def __call__( self, l ):
+                    self.new_weights.append( self.optimal_weights[self.ofs:self.ofs + l.weights_count] )
+                    self.ofs += 16 * ( 1 + l.weights_count // 16 )   # old style alignment...
+
+            g = _gather_weights( self.optimal_weights )
+            self._iterate_over_layers( context, g )
+            self.optimal_weights = g.new_weights
+
+        # iterate over all layers and apply weights to them
+        class _apply_weights():
+            def __init__( self, w ):
+                self.i = 0
+                self.optimal_weights = w
+            def __call__( self, l ):
+                l.set_weights( self.optimal_weights[ self.i ] )
+                self.i += 1
+
+        self._iterate_over_layers( context, _apply_weights( self.optimal_weights ) )
 
 
 
@@ -172,11 +218,11 @@ class TrainingMethod( object ):
         Initialize weights of layer by random values
         """
 
-        weights = numpy.random.rand( context.weights_buf_size ).astype( numpy.float32 )
+        weights = numpy.random.rand( context._weights_buf_size ).astype( numpy.float32 )
         weights -= 0.5
-        weights *= 4.0 / numpy.sqrt( numpy.float32( context.weights_buf_size / context.neurons_buf_size ) )
+        weights *= 4.0 / numpy.sqrt( numpy.float32( context._weights_buf_size / context._neurons_buf_size ) )
 
-        pyopencl.enqueue_write_buffer( context.opencl.queue, context.weights_buf, weights, is_blocking = True )
+        pyopencl.enqueue_write_buffer( context.opencl.queue, context._weights_buf, weights, is_blocking = True )
 
     def adjust_training_parameters( self, error ):
         """
@@ -303,7 +349,7 @@ class TrainingMethod( object ):
 
 #            print read_ready_event and read_ready_event.command_execution_status
             if not read_ready_event or read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
-                # we use unblocking read to avoid waiting for GPU
+                # we use nonblocking read to avoid waiting for GPU
                 # this could lead to a delay in obtaining current error
                 # error of current iteration can be returned in several iteration ahead
                 read_ready_event = pyopencl.enqueue_read_buffer( 
