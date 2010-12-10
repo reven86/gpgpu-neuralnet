@@ -51,7 +51,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 >>> tr.iterations
 10
 >>> tr.minimal_error
-0.50626325607299805
+0.5062440037727356
 
     Example of training neural network by conjugate gradient method
 >>> tr.reset( )
@@ -61,7 +61,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.50631535053253174
+0.50631231069564819
 
     Example of training neural network by Quickprop method
 >>> tr.reset( )
@@ -650,5 +650,135 @@ if __name__ == '__main__':
     doctest.testmod()
 
     import unittest #@UnresolvedImport
+
+    class TrainingResultsTest( unittest.TestCase ):
+        def setUp( self ):
+            self.tr = TrainingResults()
+
+            from opencl import OpenCL
+            from layer import InputLayer, Layer, OutputLayer, ExecutionContext
+
+            self.ocl = OpenCL( pyopencl.create_some_context() )
+
+            self.i = InputLayer( 2, self.ocl )
+            self.h = Layer( 3, self.ocl )
+            self.o = OutputLayer( 1, self.ocl )
+
+            self.i.link_next( self.h )
+            self.h.link_next( self.o, 0, 3 )
+
+            self.nnc = ExecutionContext( self.i, self.o, allow_training = True )
+
+            self.i.set_weights( numpy.array( [ 0.1 ] * self.i.weights_count, numpy.float32 ) )
+            self.h.set_weights( numpy.array( [ 0.2 ] * self.h.weights_count, numpy.float32 ) )
+            self.o.set_weights( numpy.array( [ 0.3 ] * self.o.weights_count, numpy.float32 ) )
+
+        def assertArrayEqual( self, ar1, ar2 ):
+            self.assertEqual( len( ar1 ), len( ar2 ) )
+            for x, y in zip( numpy.array( ar1, numpy.float32 ), numpy.array( ar2, numpy.float32 ) ):
+                self.assertAlmostEqual( x, y, places = 5 )
+
+        def test_store( self ):
+            self.tr.reset()
+            self.assertEqual( self.tr.iterations, numpy.int32( 0 ) )
+            self.assertGreater( self.tr.minimal_error, numpy.float32( 1e6 ) )
+            self.assertIsNone( self.tr.optimal_weights )
+            self.assertAlmostEqual( self.tr.total_time, 0.0 )
+            self.assertAlmostEqual( self.tr.opencl_time, 0.0 )
+
+            self.i.set_inputs( numpy.array( [1.0, 1.0], numpy.float32 ), is_blocking = True )
+            self.i.process()
+            initial_result = self.o.get_outputs()
+
+            self.tr.store_weights( self.nnc )
+            self.i.set_weights( numpy.array( [ 0.4 ] * self.i.weights_count, numpy.float32 ) )
+            self.i.process()
+
+            self.assertNotEqual( initial_result, self.o.get_outputs() )
+
+            self.tr.apply_weights( self.nnc )
+            self.i.process()
+            self.assertArrayEqual( initial_result , self.o.get_outputs() )
+
+    class TrainingMethodTest( unittest.TestCase ):
+        def setUp( self ):
+            from opencl import OpenCL
+            from layer import InputLayer, OutputLayer, ExecutionContext
+
+            self.ocl = OpenCL( pyopencl.create_some_context() )
+
+            self.i = InputLayer( 2, self.ocl )
+            self.o = OutputLayer( 1, self.ocl )
+
+            self.i.link_next( self.o )
+
+            self.nnc = ExecutionContext( self.i, self.o, allow_training = True )
+
+            self.i.set_weights( numpy.array( [ 0.1 ] * self.i.weights_count, numpy.float32 ) )
+            self.o.set_weights( numpy.array( [ 0.3 ] * self.o.weights_count, numpy.float32 ) )
+
+            self.tr = TrainingResults()
+
+            self._create_method()
+
+        def _create_method( self ):
+            pass
+
+        def test_create( self ):
+            if not getattr( self, 'method', None ):
+                return
+
+            self.assertAlmostEqual( self.method.n, 0.5 )
+            self.assertAlmostEqual( self.method.alpha, 0.2 )
+            self.assertAlmostEqual( self.method.kw, 1.03 )
+            self.assertAlmostEqual( self.method.pd, 0.7 )
+            self.assertAlmostEqual( self.method.pi, 1.02 )
+            self.assertAlmostEqual( self.method.last_error, 0.0 )
+            self.assertEqual( self.method.offline, False )
+
+        def test_randomize_weights( self ):
+            if not getattr( self, 'method', None ):
+                return
+
+            self.i.set_weights( numpy.array( [ 0.1 ] * self.i.weights_count, numpy.float32 ) )
+            self.assertTrue( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
+
+            self.method.randomize_weights( self.nnc )
+            w1 = self.i.get_weights()
+            self.assertFalse( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
+            self.method.randomize_weights( self.nnc )
+            self.assertFalse( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
+            self.assertNotEqual( w1, self.i.get_weights() )
+
+        def test_adjust_weights( self ):
+            if not getattr( self, 'method', None ):
+                return
+
+            self.method.n = 0.5
+            self.method.last_error = 1.0
+            self.method.kw = 1.03
+            self.method.pd = 0.5
+            self.method.pi = 1.5
+
+            self.method.adjust_training_parameters( 1.2 )
+            self.assertAlmostEqual( self.method.n, 0.25 )
+            self.assertAlmostEqual( self.method.last_error, 1.2 )
+
+            self.method.adjust_training_parameters( 1.0 )
+            self.assertAlmostEqual( self.method.n, 0.375 )
+            self.assertAlmostEqual( self.method.last_error, 1.0 )
+
+            self.method.adjust_training_parameters( 1.0 )
+            self.assertAlmostEqual( self.method.n, 0.5725 )
+            self.assertAlmostEqual( self.method.last_error, 1.0 )
+
+        def test_prepare_training( self ):
+            if not getattr( self, 'method', None ):
+                return
+
+            self.assertIsInstance( self._weights_delta_buf, pyopencl.Buffer )
+
+    class GradientDesceneTest( TrainingMethodTest ):
+        pass
 
     unittest.main()

@@ -304,6 +304,28 @@ class Layer( object ):
             )
         return outputs
 
+    def _get_gradient( self ):
+        """
+        Gets weights gradient vector of this layer.
+        """
+        gradient = numpy.ndarray( [ self.weights_count ], numpy.float32 )
+        pyopencl.enqueue_read_buffer( 
+            self.opencl.queue, self.context._gradient_buf, gradient,
+            device_offset = int( self._weights_offset * 4 ), is_blocking = True
+            )
+        return gradient
+
+    def _get_errors( self ):
+        """
+        Gets propagated errors of this layer.
+        """
+        err = numpy.ndarray( [ self.neuron_count ], numpy.float32 )
+        pyopencl.enqueue_read_buffer( 
+            self.opencl.queue, self.context._errors_backpropagation_buf, err,
+            device_offset = int( self._neurons_offset * 4 ), is_blocking = True
+            )
+        return err
+
     def reset_processed( self ):
         """
         Recursively reset processed flag on all linked layers.
@@ -575,6 +597,8 @@ if __name__ == '__main__':
             self.assertArrayEqual( grad[self.i._weights_offset:self.i._weights_offset + self.i._weights_count], [ -0.033015892, -0.033015892, 0.0 ] * 2 )
             self.assertArrayEqual( grad[self.h._weights_offset:self.h._weights_offset + self.h._weights_count], [ -0.08401663, -0.01113619, -0.01113619 ] * 3 )
 
+            self.assertArrayEqual( self.i._get_gradient(), [ -0.033015892, -0.033015892, 0.0 ] * 2 )
+
     class ComplexNNTest( unittest.TestCase ):
         def setUp( self ):
             from opencl import OpenCL
@@ -613,5 +637,7 @@ if __name__ == '__main__':
             self.i.process()
 
             self.assertArrayEqual( self.i.get_outputs()[:3], self.h1.get_inputs() )
+            self.assertArrayEqual( self.i.get_outputs()[:5], self.h2.get_inputs() )
+            self.assertArrayEqual( self.i.get_outputs()[4:10], self.h3.get_inputs()[:6] )
 
     unittest.main()
