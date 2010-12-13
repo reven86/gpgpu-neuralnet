@@ -61,7 +61,7 @@ array([ 1.,  1.,  1.,  1.,  1.,  1.], dtype=float32)
 >>> o.set_weights( numpy.array( ( 4.839, 1.578, 3.152 ), numpy.float32 ) )
 >>> m.start_training( nnc, training_data, tr, 10 )
 >>> tr.minimal_error
-0.50631231069564819
+0.50631242990493774
 
     Example of training neural network by Quickprop method
 >>> tr.reset( )
@@ -236,7 +236,7 @@ class TrainingMethod( object ):
 
     def __getstate__( self ):
         odict = self.__dict__.copy()
-        del odict['weights_delta_buf']
+        del odict['_weights_delta_buf']
         return odict
 
     def prepare_training( self, context ):
@@ -310,6 +310,11 @@ class TrainingMethod( object ):
         context.opencl.kernel_setup_training_data.set_arg( 6, context._errors_backpropagation_buf )
         context.opencl.kernel_setup_training_data.set_arg( 7, total_error_buf )
 
+        # clear gradient
+        pyopencl.enqueue_copy_buffer( 
+            context.opencl.queue, zeros_buf, context._gradient_buf
+            ).wait()
+
         i = 0
         calc_error_evt = None
         while training_results.minimal_error > target_error:
@@ -318,7 +323,10 @@ class TrainingMethod( object ):
             i += 1
 
             reset_total_error_evt = pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, total_error_buf, byte_count = 4 )
+            j = 0
             for inputs, outputs in training_data:
+                j += 1
+#                pyopencl.enqueue_barrier( context.opencl.queue )
                 evt = context.input_layer.set_inputs( inputs, is_blocking = False )
                 context.input_layer._process_wait_for.append( evt )
                 context.input_layer.process()
@@ -348,6 +356,9 @@ class TrainingMethod( object ):
                         )
                     context.output_layer._calc_gradient_wait_for.append( evt )
 
+                if j % 20000 == 0:
+                    context.opencl.queue.finish()
+
             if self.offline:
                 save_n = self.n
                 self.n /= numpy.float32( len( training_data ) )
@@ -356,20 +367,10 @@ class TrainingMethod( object ):
                 evt = pyopencl.enqueue_copy_buffer( context.opencl.queue, zeros_buf, context._gradient_buf )
                 context.output_layer._calc_gradient_wait_for.append( evt )
 
-#            print read_ready_event and read_ready_event.command_execution_status
-            if not read_ready_event:
-                # we use nonblocking read to avoid waiting for GPU
-                # this could lead to a delay in obtaining current error
-                # error of current iteration can be returned in several iteration ahead
-                read_ready_event = pyopencl.enqueue_read_buffer( 
-                    context.opencl.queue, total_error_buf,
-                    total_error, is_blocking = False,
-                    wait_for = ( calc_error_evt, ) if calc_error_evt else None
-                    )
-
-            if read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
+            if read_ready_event and read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
+                read_ready_event = None
                 error_sum = total_error[0] / len( training_data )
-                #print error_sum, ' ', i, ' ', self.n
+#                print error_sum, ' ', i, ' ', self.n
 
                 if report:
                     report.process_iteration( len( training_data ), self, training_results, error_sum, context )
@@ -385,6 +386,16 @@ class TrainingMethod( object ):
 
                 training_results.opencl_time += context.opencl.gather_opencl_stats()
 
+            if not read_ready_event:
+                # we use nonblocking read to avoid waiting for GPU
+                # this could lead to a delay in obtaining current error
+                # error of current iteration can be returned in several iteration ahead
+                read_ready_event = pyopencl.enqueue_read_buffer( 
+                    context.opencl.queue, total_error_buf,
+                    total_error, is_blocking = False,
+                    wait_for = ( calc_error_evt, ) if calc_error_evt else None
+                    )
+
         training_results.iterations += i
 
         pyopencl.enqueue_read_buffer( 
@@ -393,8 +404,6 @@ class TrainingMethod( object ):
             wait_for = ( calc_error_evt, ) if calc_error_evt else None
             )
         error_sum = total_error[0] / len( training_data )
-
-        self.adjust_training_parameters( error_sum )
 
         if error_sum < training_results.minimal_error:
             training_results.minimal_error = error_sum
@@ -408,10 +417,6 @@ class TrainingMethod( object ):
         Adjust weights of neural network by certain direction.
         """
         dir = self.get_weights_direction_buf( context ) #this call should always return opposite direction
-
-        #print self.n
-        #print context.input_layer.get_weights( )
-        #print context.input_layer._get_gradient( )
 
         context.opencl.kernel_adjust_weights( 
             context.opencl.queue, ( int( context._weights_buf_size ), ),
@@ -706,7 +711,8 @@ if __name__ == '__main__':
             self.assertArrayEqual( initial_result , self.o.get_outputs() )
 
     class TrainingMethodTest( unittest.TestCase ):
-        def setUp( self ):
+        @classmethod
+        def setUpClass( self ):
             from opencl import OpenCL
             from layer import InputLayer, OutputLayer, ExecutionContext
 
@@ -726,6 +732,7 @@ if __name__ == '__main__':
 
             self._create_method()
 
+        @classmethod
         def _create_method( self ):
             pass
 
@@ -735,6 +742,8 @@ if __name__ == '__main__':
                 self.assertAlmostEqual( x, y, places = 5 )
 
         def test_create( self ):
+            self.setUpClass()
+
             if not getattr( self, 'method', None ):
                 return
 
@@ -758,7 +767,7 @@ if __name__ == '__main__':
             self.assertFalse( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
             self.method.randomize_weights( self.nnc )
             self.assertFalse( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
-            self.assertNotAlmostEqual( ( w1 - self.i.get_weights() ).sum( ), 0.0 )
+            self.assertNotAlmostEqual( ( w1 - self.i.get_weights() ).sum(), 0.0 )
 
         def test_adjust_weights( self ):
             if not getattr( self, 'method', None ):
@@ -790,52 +799,91 @@ if __name__ == '__main__':
             self.assertIsInstance( self.method._weights_delta_buf, pyopencl.Buffer )
 
     class GradientDescentTest( TrainingMethodTest ):
+        @classmethod
         def _create_method( self ):
-            self.method = GradientDescent( )
+            self.method = GradientDescent()
 
-        def test_training_one_iter( self ):
-            tr = TrainingResults()
+        def _reset_data( self ):
+            self._tr = TrainingResults()
 
             self.last_error = numpy.float32( 0.0 )
             self.method.n = numpy.float32( 0.5 )
             self.method.kw = numpy.float32( 1.03 )
             self.method.pd = numpy.float32( 0.5 )
             self.method.pi = numpy.float32( 1.5 )
+            self.method.alpha = numpy.float32( 0.2 )
 
             self.i.set_weights( numpy.array( [ 0.1 ] * self.i.weights_count, numpy.float32 ) )
             self.o.set_weights( numpy.array( [ 0.3 ] * self.o.weights_count, numpy.float32 ) )
 
-            training_data = ( 
+            self._training_data = ( 
                 ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
                 ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
                 ( numpy.array( ( 1.0, 0.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
-                ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
+                ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
             )
 
-            old_w = ( self.i.get_weights( ), self.o.get_weights( ) )
+        def test_one_data( self ):
+            self._reset_data()
 
-            self.i.set_inputs( training_data[0][0] )
-            self.i.process( )
+            old_w = ( self.i.get_weights(), self.o.get_weights() )
+
+            self.i.set_inputs( self._training_data[0][0] )
+            self.i.process()
 
             total_error_buf = pyopencl.Buffer( 
                 self.nnc.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
                 hostbuf = numpy.array( [1e12], numpy.float32 ) )
 
-            self.o._set_outputs_and_calc_errors( training_data[0][1], total_error_buf )
-            self.i.calc_weights_gradient( )
+            self.o._set_outputs_and_calc_errors( self._training_data[0][1], total_error_buf )
+            self.i.calc_weights_gradient()
 
-            grad = ( self.i._get_gradient( ), self.o._get_gradient( ) )
-            #print self.method.n
-            #print self.i.get_weights( )
-            #print grad
+            grad = ( self.i._get_gradient(), self.o._get_gradient() )
 
-            self.method.start_training( self.nnc, training_data[:1], tr, 1 )
-            self.assertAlmostEqual( self.o.get_outputs( )[ 0 ], 0.222823, places = 5 )
-            self.assertAlmostEqual( self.o._get_errors( )[ 0 ], 0.141171, places = 5 )
-            self.assertAlmostEqual( tr.minimal_error, 0.222823, places = 5 )
-            self.assertArrayEqual( self.o._get_gradient( ), [ 0.0, 0.0, 0.0 ] )  # gradient is cleared, it's ok
+            self.method.start_training( self.nnc, self._training_data[:1], self._tr, 1 )
+            self.assertEqual( self._tr.iterations, 1 )
+            self.assertAlmostEqual( self.o.get_outputs()[ 0 ], 0.222823, places = 5 )
+            self.assertAlmostEqual( self.o._get_errors()[ 0 ], 0.141171, places = 5 )
+            self.assertAlmostEqual( self._tr.minimal_error, 0.222823, places = 5 )
+            self.assertArrayEqual( self.o._get_gradient(), [ 0.0, 0.0, 0.0 ] )  # gradient is cleared, it's ok
 
-            self.assertArrayEqual( self.i.get_weights( ), old_w[ 0 ] - 0.5 * grad[ 0 ] )
-            self.assertArrayEqual( self.o.get_weights( ), old_w[ 1 ] - 0.5 * grad[ 1 ] )
+            self.assertArrayEqual( self.i.get_weights(), old_w[ 0 ] - 0.5 * grad[ 0 ] )
+            self.assertArrayEqual( self.o.get_weights(), old_w[ 1 ] - 0.5 * grad[ 1 ] )
+
+        def test_multiple_data( self ):
+            self._reset_data()
+
+            self.method.start_training( self.nnc, self._training_data, self._tr, 1 )
+            err1 = self._tr.minimal_error
+            self.method.start_training( self.nnc, self._training_data, self._tr, 1 )
+
+            self.assertLess( self._tr.minimal_error, err1 )
+
+        def test_multiple_iterations( self ):
+            self._reset_data()
+
+            self.method.alpha = numpy.float32( 0.0 )
+            for i in range( 0, 5 ):
+                self.method.start_training( self.nnc, self._training_data, self._tr, 1 )
+
+            save_tr = self._tr
+
+            self._reset_data()
+            self.method.alpha = numpy.float32( 0.0 )
+            self.method.start_training( self.nnc, self._training_data, self._tr, 5 )
+
+            self.assertAlmostEqual( self._tr.minimal_error, save_tr.minimal_error )
+            self.assertEqual( self._tr.iterations, save_tr.iterations )
+            self.assertArrayEqual( self._tr.optimal_weights[0], save_tr.optimal_weights[0] )
+            self.assertArrayEqual( self._tr.optimal_weights[1], save_tr.optimal_weights[1] )
+
+        def test_learning( self ):
+            self._reset_data()
+
+            self.method.start_training( self.nnc, self._training_data, self._tr, 100 )
+            for i, o in self._training_data:
+                self.i.set_inputs( i )
+                self.i.process()
+                self.assertAlmostEqual( self.o.get_outputs()[0], o[0], delta = 0.1 )
 
     unittest.main()

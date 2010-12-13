@@ -521,7 +521,8 @@ if __name__ == '__main__':
     import unittest #@UnresolvedImport
 
     class LayerTest( unittest.TestCase ):
-        def setUp( self ):
+        @classmethod
+        def setUpClass( self ):
             from opencl import OpenCL
             self.ocl = OpenCL( pyopencl.create_some_context() )
 
@@ -639,8 +640,8 @@ if __name__ == '__main__':
 
             pyopencl.enqueue_write_buffer( self.ocl.queue, self.nnc._weights_buf, weights, is_blocking = True )
 
-            self.i.set_inputs( numpy.array( [x * x for x in range( 0, 10 )], numpy.float32 ), is_blocking = True )
-            self.i.process()
+            self.nnc.input_layer.set_inputs( numpy.array( [x * x for x in range( 0, 10 )], numpy.float32 ), is_blocking = True )
+            self.nnc.input_layer.process()
 
             self.assertArrayEqual( self.i.get_outputs()[:3], self.h1.get_inputs() )
             self.assertArrayEqual( self.i.get_outputs()[:5], self.h2.get_inputs() )
