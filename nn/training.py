@@ -338,6 +338,7 @@ class TrainingMethod( object ):
 
                 context.output_layer._calc_gradient_wait_for.append( calc_error_evt )
                 context.input_layer.calc_weights_gradient()
+                #print context.output_layer._get_gradient( )
 
                 if not self.offline:
                     self.adjust_weights( context )
@@ -363,7 +364,7 @@ class TrainingMethod( object ):
                 read_ready_event = pyopencl.enqueue_read_buffer( 
                     context.opencl.queue, total_error_buf,
                     total_error, is_blocking = False,
-                    wait_for = ( calc_error_evt, )
+                    wait_for = ( calc_error_evt, ) if calc_error_evt else None
                     )
 
             if read_ready_event.command_execution_status == pyopencl.command_execution_status.COMPLETE:
@@ -389,7 +390,7 @@ class TrainingMethod( object ):
         pyopencl.enqueue_read_buffer( 
             context.opencl.queue, total_error_buf,
             total_error, is_blocking = True,
-            wait_for = ( calc_error_evt, )
+            wait_for = ( calc_error_evt, ) if calc_error_evt else None
             )
         error_sum = total_error[0] / len( training_data )
 
@@ -408,13 +409,17 @@ class TrainingMethod( object ):
         """
         dir = self.get_weights_direction_buf( context ) #this call should always return opposite direction
 
+        #print self.n
+        #print context.input_layer.get_weights( )
+        #print context.input_layer._get_gradient( )
+
         context.opencl.kernel_adjust_weights( 
             context.opencl.queue, ( int( context._weights_buf_size ), ),
             dir,
             self.n, self.alpha,
             self._weights_delta_buf,
             context._weights_buf,
-            wait_for = ( context.input_layer._calc_gradient_event, )
+            wait_for = ( context.input_layer._calc_gradient_event, ),
             )
 
 
@@ -724,6 +729,11 @@ if __name__ == '__main__':
         def _create_method( self ):
             pass
 
+        def assertArrayEqual( self, ar1, ar2 ):
+            self.assertEqual( len( ar1 ), len( ar2 ) )
+            for x, y in zip( numpy.array( ar1, numpy.float32 ), numpy.array( ar2, numpy.float32 ) ):
+                self.assertAlmostEqual( x, y, places = 5 )
+
         def test_create( self ):
             if not getattr( self, 'method', None ):
                 return
@@ -748,17 +758,17 @@ if __name__ == '__main__':
             self.assertFalse( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
             self.method.randomize_weights( self.nnc )
             self.assertFalse( all( map( lambda x: abs( x - 0.1 ) < 0.0001, self.i.get_weights() ) ) )
-            self.assertNotEqual( w1, self.i.get_weights() )
+            self.assertNotAlmostEqual( ( w1 - self.i.get_weights() ).sum( ), 0.0 )
 
         def test_adjust_weights( self ):
             if not getattr( self, 'method', None ):
                 return
 
-            self.method.n = 0.5
-            self.method.last_error = 1.0
-            self.method.kw = 1.03
-            self.method.pd = 0.5
-            self.method.pi = 1.5
+            self.method.last_error = numpy.float32( 1.0 )
+            self.method.n = numpy.float32( 0.5 )
+            self.method.kw = numpy.float32( 1.03 )
+            self.method.pd = numpy.float32( 0.5 )
+            self.method.pi = numpy.float32( 1.5 )
 
             self.method.adjust_training_parameters( 1.2 )
             self.assertAlmostEqual( self.method.n, 0.25 )
@@ -769,16 +779,63 @@ if __name__ == '__main__':
             self.assertAlmostEqual( self.method.last_error, 1.0 )
 
             self.method.adjust_training_parameters( 1.0 )
-            self.assertAlmostEqual( self.method.n, 0.5725 )
+            self.assertAlmostEqual( self.method.n, 0.5625 )
             self.assertAlmostEqual( self.method.last_error, 1.0 )
 
         def test_prepare_training( self ):
             if not getattr( self, 'method', None ):
                 return
 
-            self.assertIsInstance( self._weights_delta_buf, pyopencl.Buffer )
+            self.method.prepare_training( self.nnc )
+            self.assertIsInstance( self.method._weights_delta_buf, pyopencl.Buffer )
 
-    class GradientDesceneTest( TrainingMethodTest ):
-        pass
+    class GradientDescentTest( TrainingMethodTest ):
+        def _create_method( self ):
+            self.method = GradientDescent( )
+
+        def test_training_one_iter( self ):
+            tr = TrainingResults()
+
+            self.last_error = numpy.float32( 0.0 )
+            self.method.n = numpy.float32( 0.5 )
+            self.method.kw = numpy.float32( 1.03 )
+            self.method.pd = numpy.float32( 0.5 )
+            self.method.pi = numpy.float32( 1.5 )
+
+            self.i.set_weights( numpy.array( [ 0.1 ] * self.i.weights_count, numpy.float32 ) )
+            self.o.set_weights( numpy.array( [ 0.3 ] * self.o.weights_count, numpy.float32 ) )
+
+            training_data = ( 
+                ( numpy.array( ( 0.0, 0.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
+                ( numpy.array( ( 0.0, 1.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
+                ( numpy.array( ( 1.0, 0.0, ), numpy.float32 ), numpy.array( ( 1.0, ), numpy.float32 ) ),
+                ( numpy.array( ( 1.0, 1.0, ), numpy.float32 ), numpy.array( ( 0.0, ), numpy.float32 ) ),
+            )
+
+            old_w = ( self.i.get_weights( ), self.o.get_weights( ) )
+
+            self.i.set_inputs( training_data[0][0] )
+            self.i.process( )
+
+            total_error_buf = pyopencl.Buffer( 
+                self.nnc.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
+                hostbuf = numpy.array( [1e12], numpy.float32 ) )
+
+            self.o._set_outputs_and_calc_errors( training_data[0][1], total_error_buf )
+            self.i.calc_weights_gradient( )
+
+            grad = ( self.i._get_gradient( ), self.o._get_gradient( ) )
+            #print self.method.n
+            #print self.i.get_weights( )
+            #print grad
+
+            self.method.start_training( self.nnc, training_data[:1], tr, 1 )
+            self.assertAlmostEqual( self.o.get_outputs( )[ 0 ], 0.222823, places = 5 )
+            self.assertAlmostEqual( self.o._get_errors( )[ 0 ], 0.141171, places = 5 )
+            self.assertAlmostEqual( tr.minimal_error, 0.222823, places = 5 )
+            self.assertArrayEqual( self.o._get_gradient( ), [ 0.0, 0.0, 0.0 ] )  # gradient is cleared, it's ok
+
+            self.assertArrayEqual( self.i.get_weights( ), old_w[ 0 ] - 0.5 * grad[ 0 ] )
+            self.assertArrayEqual( self.o.get_weights( ), old_w[ 1 ] - 0.5 * grad[ 1 ] )
 
     unittest.main()

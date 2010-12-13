@@ -493,6 +493,27 @@ class OutputLayer( Layer ):
     Special layer for outputs.
     """
 
+    def _set_outputs_and_calc_errors( self, outputs, total_error_buf ):
+        """
+        Set target outputs of this layer and calculate errors for output layer and mean error.
+        """
+        o_buf = pyopencl.Buffer( 
+            self.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
+            hostbuf = outputs
+            )
+
+        self.opencl.kernel_setup_training_data.set_args( 
+            self.context._neurons_buf_size, self.context._outputs_buf, self.context.output_layer._neurons_offset,
+            self.context.output_layer.neuron_count, o_buf, pyopencl.LocalMemory( 32 * 4 ),
+            self.context._errors_backpropagation_buf, total_error_buf )
+
+        pyopencl.enqueue_nd_range_kernel( 
+            self.opencl.queue,
+            self.opencl.kernel_setup_training_data,
+            ( 32, ), ( 32, ),
+            None, None
+            ).wait()
+
 if __name__ == '__main__':
     import doctest #@UnresolvedImport
     doctest.testmod( optionflags = doctest.ELLIPSIS )
@@ -562,27 +583,11 @@ if __name__ == '__main__':
 
             self.assertArrayEqual( self.o.get_outputs(), [ 0.29154554 ] )
 
-            o_buf = pyopencl.Buffer( 
-                self.nnc.opencl.context, pyopencl.mem_flags.READ_ONLY | pyopencl.mem_flags.COPY_HOST_PTR,
-                hostbuf = numpy.ones( [self.nnc.output_layer.neuron_count], numpy.float32 )
-                )
-
             total_error_buf = pyopencl.Buffer( 
                 self.nnc.opencl.context, pyopencl.mem_flags.READ_WRITE | pyopencl.mem_flags.COPY_HOST_PTR,
                 hostbuf = numpy.array( [1e12], numpy.float32 ) )
 
-            self.nnc.opencl.kernel_setup_training_data.set_args( 
-                self.nnc._neurons_buf_size, self.nnc._outputs_buf, self.nnc.output_layer._neurons_offset,
-                self.nnc.output_layer.neuron_count, o_buf, pyopencl.LocalMemory( 32 * 4 ),
-                self.nnc._errors_backpropagation_buf, total_error_buf )
-
-            pyopencl.enqueue_nd_range_kernel( 
-                self.nnc.opencl.queue,
-                self.nnc.opencl.kernel_setup_training_data,
-                ( 32, ), ( 32, ),
-                None, None
-                ).wait()
-
+            self.o._set_outputs_and_calc_errors( numpy.ones( [self.nnc.output_layer.neuron_count], numpy.float32 ), total_error_buf )
             self.i.calc_weights_gradient()
 
             err = numpy.ndarray( [ self.nnc._neurons_buf_size ], numpy.float32 )
@@ -597,6 +602,7 @@ if __name__ == '__main__':
             self.assertArrayEqual( grad[self.i._weights_offset:self.i._weights_offset + self.i._weights_count], [ -0.033015892, -0.033015892, 0.0 ] * 2 )
             self.assertArrayEqual( grad[self.h._weights_offset:self.h._weights_offset + self.h._weights_count], [ -0.08401663, -0.01113619, -0.01113619 ] * 3 )
 
+            self.assertArrayEqual( self.o._get_gradient(), [ real_err ] + list( self.o.get_inputs() * real_err ) )
             self.assertArrayEqual( self.i._get_gradient(), [ -0.033015892, -0.033015892, 0.0 ] * 2 )
 
     class ComplexNNTest( unittest.TestCase ):
